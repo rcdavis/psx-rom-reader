@@ -230,6 +230,23 @@ void psxrom_mmd_free(psxrom_mmd_model *m);
  * palettes, e.g. times of day) described by the .MAP, which also holds camera, lights, spawn points,
  * warps and sprite objects. Only the parts needed to render and describe the map are decoded. */
 
+/* A sprite: a rectangle of one of the map's embedded images, drawn over the background. */
+typedef struct {
+    uint16_t uv_x, uv_y;        /* texel position within the texture page */
+    uint16_t width, height;
+    int16_t pos[3];
+    uint16_t clut;              /* 0xFFFF = use the TFS palette; < 16 = 4bpp sub-palette; else a VRAM CLUT row - 468 */
+    uint16_t transparency;      /* 4 = opaque (no semi-transparency) */
+} psxrom_map_object;
+
+/* A placed sprite with up to 8 animation steps. */
+typedef struct {
+    int16_t sprite[8];          /* object index per step, negative = unused */
+    int16_t duration[8];
+    uint16_t x, y;
+    uint16_t flag;
+} psxrom_map_instance;
+
 typedef struct {
     int32_t camera_origin[3];
     int32_t camera_target[3];
@@ -241,10 +258,14 @@ typedef struct {
     uint16_t warp_map[10];      /* destination map index */
     uint16_t warp_spawn[10];    /* destination spawn point */
     uint16_t num_digimon;       /* roaming Digimon records (not decoded) */
-    uint16_t num_objects;       /* sprite objects (not decoded) */
+    uint16_t num_objects;
+    psxrom_map_object *objects;
     uint16_t num_instances;
-    size_t num_images;          /* embedded TIM sections */
+    psxrom_map_instance *instances;
+    size_t num_images;          /* embedded TIMs: 8bpp ones hold sprite pixels, 4bpp ones too */
+    psxrom_tim *images;
     uint8_t collision[100][100];
+    uint8_t *data;              /* copy of the file; images point into it */
 } psxrom_map;
 
 psxrom_result psxrom_map_parse(const uint8_t *data, size_t size, psxrom_map *out);
@@ -261,10 +282,21 @@ typedef struct {
 psxrom_result psxrom_tfs_parse(const uint8_t *data, size_t size, psxrom_tfs *out);
 void psxrom_tfs_free(psxrom_tfs *t);
 
+/* Renders one sprite to RGBA. With a 0xFFFF clut the TFS palette selects the colours.
+ * PSXROM_ERR_NOT_FOUND if no embedded image holds the sprite's texels. The caller frees *rgba. */
+psxrom_result psxrom_map_render_object(const psxrom_map *m, const psxrom_tfs *t, size_t object,
+                                       uint32_t palette, uint8_t **rgba, uint32_t *width, uint32_t *height);
+
 /* Renders the whole background with one palette to tiles_w*128 x tiles_h*128 RGBA (empty cells are
  * transparent). The caller frees *rgba. */
 psxrom_result psxrom_map_render(const psxrom_map *m, const psxrom_tfs *t, uint32_t palette,
                                 uint8_t **rgba, uint32_t *width, uint32_t *height);
+
+/* Like psxrom_map_render, then draws every instance's sprite for the given game frame (30 per second
+ * in the data's units): each instance steps through its sprites for their durations (negative sprite
+ * ids hide it, -1 ends the list) and loops. */
+psxrom_result psxrom_map_render_scene(const psxrom_map *m, const psxrom_tfs *t, uint32_t palette, uint32_t frame,
+                                      uint8_t **rgba, uint32_t *width, uint32_t *height);
 
 #ifdef __cplusplus
 }

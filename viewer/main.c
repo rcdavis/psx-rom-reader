@@ -45,6 +45,7 @@ static void usage(void)
 		  "  mmd <name|index> <out>     export a posed, textured Digimon model (.glb .gltf .obj)\n"
 		  "  mmd-all <dir> [glb|gltf|obj]  export every Digimon model\n"
 		  "  map <path.MAP> [prefix]    describe a Digimon World map; with prefix write <prefix>_<n>.png per palette\n"
+		  "                             (sprites drawn at frame 0) and <prefix>_obj<N>.png per sprite\n"
 		  "  map-all <dir> [palette]    render every map's background (default palette 0) as PNG\n"
 		  "  str-convert <path> <out>   video + XA audio to webm/mkv/mp4/... (needs ffmpeg in PATH)\n",
 		  stderr);
@@ -1174,7 +1175,7 @@ static psxrom_result map_render_all(const psxrom_map *m, const psxrom_tfs *t, co
 		if (only >= 0 && p != (uint32_t)only) continue;
 		uint8_t *rgba;
 		uint32_t w, h;
-		psxrom_result r = psxrom_map_render(m, t, p, &rgba, &w, &h);
+		psxrom_result r = psxrom_map_render_scene(m, t, p, 0, &rgba, &w, &h);
 		if (r != PSXROM_OK) return r;
 		char out[2048];
 		snprintf(out, sizeof out, "%s_%u.png", prefix, p);
@@ -1203,6 +1204,17 @@ static void describe_map(const psxrom_map *m, const psxrom_tfs *t)
 			   m->spawn[i][2], m->spawn[i][3], m->warp_map[i], m->warp_spawn[i]);
 	printf("%zu embedded image(s), %u object(s), %u instance(s), %u Digimon\n", m->num_images, m->num_objects,
 		   m->num_instances, m->num_digimon);
+	for (size_t i = 0; i < m->num_objects; i++) {
+		const psxrom_map_object *o = &m->objects[i];
+		printf("object %zu: %ux%u uv (%u,%u) pos (%d,%d,%d) clut %u trans %u\n", i, o->width, o->height, o->uv_x,
+			   o->uv_y, o->pos[0], o->pos[1], o->pos[2], o->clut, o->transparency);
+	}
+	for (size_t i = 0; i < m->num_instances; i++) {
+		const psxrom_map_instance *n = &m->instances[i];
+		printf("instance %zu: at (%u,%u) flag %u sprites", i, n->x, n->y, n->flag);
+		for (int k = 0; k < 8; k++) printf(" %d/%d", n->sprite[k], n->duration[k]);
+		putchar('\n');
+	}
 }
 
 struct map_ctx { struct out_ctx o; int palette; };
@@ -1286,7 +1298,18 @@ static int media_command(psxrom_disc *d, int argc, char **argv, psxrom_result *r
 		psxrom_tfs t;
 		if ((*r = map_load(d, argv[3], &m, &t)) == PSXROM_OK) {
 			describe_map(&m, &t);
-			if (argc >= 5) *r = map_render_all(&m, &t, argv[4], -1);
+			if (argc >= 5) {
+				*r = map_render_all(&m, &t, argv[4], -1);
+				for (size_t i = 0; *r == PSXROM_OK && i < m.num_objects; i++) {
+					uint8_t *rgba;
+					uint32_t w, h;
+					char out[2048];
+					if (psxrom_map_render_object(&m, &t, i, 0, &rgba, &w, &h) != PSXROM_OK) continue;
+					snprintf(out, sizeof out, "%s_obj%zu.png", argv[4], i);
+					if (!write_image(out, rgba, w, h)) *r = PSXROM_ERR_IO;
+					free(rgba);
+				}
+			}
 			psxrom_map_free(&m);
 			psxrom_tfs_free(&t);
 		}
