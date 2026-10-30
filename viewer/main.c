@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -641,9 +642,10 @@ static int png_encode_rgba(struct sbuf *out, const uint8_t *rgba, uint32_t w, ui
 }
 
 struct gltf {
-	struct sbuf bin, views, accs, meshes, nodes, materials, textures, images;
+	struct sbuf bin, views, accs, meshes, nodes, materials, textures, images, anims;
 	size_t nviews, naccs, nmesh, nmat, nimg;
 	int binary;
+	int flip;               /* negate Y and Z in the vertex data (otherwise a parent node does it) */
 	const psxrom_tim *tim;
 	int mat_of[32];
 };
@@ -713,14 +715,15 @@ static void add_primitive(struct gltf *g, struct sbuf *prims, const psxrom_tmd_t
 			for (int k = 0; k < 3; k++) {
 				const psxrom_tmd_vertex *v = &tris[i].v[k];
 				if (a == 0) {
-					float p[3] = {v->pos[0], -v->pos[1], -v->pos[2]};
+					float p[3] = {v->pos[0], g->flip ? -v->pos[1] : v->pos[1], g->flip ? -v->pos[2] : v->pos[2]};
 					for (int c = 0; c < 3; c++) {
 						if (p[c] < mn[c]) mn[c] = p[c];
 						if (p[c] > mx[c]) mx[c] = p[c];
 						sb_f32(&g->bin, p[c]);
 					}
 				} else if (a == 1) {
-					sb_f32(&g->bin, v->normal[0]); sb_f32(&g->bin, -v->normal[1]); sb_f32(&g->bin, -v->normal[2]);
+					float sg = g->flip ? -1.0f : 1.0f;
+					sb_f32(&g->bin, v->normal[0]); sb_f32(&g->bin, sg * v->normal[1]); sb_f32(&g->bin, sg * v->normal[2]);
 				} else if (a == 2) {
 					/* textured polygons use 128 as the neutral modulation colour */
 					float sc = tris[i].textured ? 1.0f / 128.0f : 1.0f / 255.0f;
@@ -745,14 +748,151 @@ static void add_primitive(struct gltf *g, struct sbuf *prims, const psxrom_tmd_t
 			  first ? "" : ",", names[0], acc0, names[1], acc0 + 1, names[2], acc0 + 2, names[3], acc0 + 3, material);
 }
 
+/* Same rotation order as the PSX data: matrix = Rx * Ry * Rz, angles in degrees. */
+static void euler_quat(const float r[3], float q[4])
+{
+	const float k = 3.14159265358979f / 360.0f;
+	float c1 = cosf(r[0] * k), s1 = sinf(r[0] * k);
+	float c2 = cosf(r[1] * k), s2 = sinf(r[1] * k);
+	float c3 = cosf(r[2] * k), s3 = sinf(r[2] * k);
+	q[0] = s1 * c2 * c3 + c1 * s2 * s3;
+	q[1] = c1 * s2 * c3 - s1 * c2 * s3;
+	q[2] = c1 * c2 * s3 + s1 * s2 * c3;
+	q[3] = c1 * c2 * c3 - s1 * s2 * s3;
+}
+
+static size_t add_float_acc(struct gltf *g, const float *v, size_t count, int ncomp, int minmax)
+{
+	static const char *types[5] = {"", "SCALAR", "VEC2", "VEC3", "VEC4"};
+	bin_align(g);
+	size_t off = g->bin.n;
+	for (size_t i = 0; i < count * (size_t)ncomp; i++) sb_f32(&g->bin, v[i]);
+	size_t view = add_view(g, off, g->bin.n - off, 0);
+	sb_printf(&g->accs, "%s{\"bufferView\":%zu,\"componentType\":5126,\"count\":%zu,\"type\":\"%s\"",
+			  g->naccs ? "," : "", view, count, types[ncomp]);
+	if (minmax) sb_printf(&g->accs, ",\"min\":[%.9g],\"max\":[%.9g]", v[0], v[count - 1]);
+	sb_add(&g->accs, "}", 1);
+	return g->naccs++;
+}
+
+/* Bones become nodes with their rest pose; a root node applies the Y/Z flip (180 degrees about X). */
+static void build_skeleton(struct gltf *g, const psxrom_mmd_model *m, const int *mesh_of, size_t nobj)
+{
+	for (size_t i = 0; i < m->bone_count; i++) {
+		const psxrom_mmd_pose *p = &m->rest[i];
+		float q[4];
+		euler_quat(p->rot, q);
+		sb_printf(&g->nodes, "%s{\"name\":\"bone%zu\"", i ? "," : "", i);
+		unsigned obj = m->nodes[i].object;
+		if (obj < nobj && mesh_of[obj] >= 0) sb_printf(&g->nodes, ",\"mesh\":%d", mesh_of[obj]);
+		int first = 1;
+		for (size_t j = 0; j < m->bone_count; j++) {
+			if (m->nodes[j].parent != i) continue;
+			sb_printf(&g->nodes, first ? ",\"children\":[%zu" : ",%zu", j);
+			first = 0;
+		}
+		if (!first) sb_add(&g->nodes, "]", 1);
+		sb_printf(&g->nodes, ",\"translation\":[%.9g,%.9g,%.9g],\"rotation\":[%.9g,%.9g,%.9g,%.9g],"
+				  "\"scale\":[%.9g,%.9g,%.9g]}", p->pos[0], p->pos[1], p->pos[2], q[0], q[1], q[2], q[3],
+				  p->scale[0], p->scale[1], p->scale[2]);
+	}
+	sb_printf(&g->nodes, ",{\"name\":\"root\",\"rotation\":[1,0,0,0],\"children\":[");
+	int first = 1;
+	for (size_t j = 0; j < m->bone_count; j++) {
+		if (m->nodes[j].parent != 255) continue;
+		sb_printf(&g->nodes, "%s%zu", first ? "" : ",", j);
+		first = 0;
+	}
+	sb_add(&g->nodes, "]}", 2);
+}
+
+static int differs(const float *a, const float *b, int n, float eps)
+{
+	for (int i = 0; i < n; i++)
+		if (fabsf(a[i] - b[i]) > eps) return 1;
+	return 0;
+}
+
+/* One glTF animation per MMD animation; only channels that move away from the rest pose are written. */
+static void build_animations(struct gltf *g, const psxrom_mmd_model *m)
+{
+	size_t nb = m->bone_count, nanim = 0;
+	for (size_t ai = 0; ai < m->num_anims; ai++) {
+		const psxrom_mmd_anim *a = &m->anims[ai];
+		size_t ns = a->num_samples;
+		if (ns < 2) continue;
+		float *buf = malloc(ns * 4 * sizeof *buf);
+		if (!buf) return;
+
+		struct sbuf chans = {0}, samps = {0};
+		size_t nsamp = 0, time_acc = 0;
+		int have_time = 0;
+		for (size_t b = 0; b < nb; b++) {
+			for (int path = 0; path < 3; path++) {
+				int nc = path == 1 ? 4 : 3, moved = 0;
+				float prev[4] = {0, 0, 0, 1};
+				for (size_t i = 0; i < ns; i++) {
+					const psxrom_mmd_pose *p = &a->poses[i * nb + b];
+					const psxrom_mmd_pose *r = &m->rest[b];
+					float *o = buf + i * (size_t)nc;
+					if (path == 0) {
+						memcpy(o, p->pos, sizeof p->pos);
+						moved |= differs(p->pos, r->pos, 3, 1e-3f);
+					} else if (path == 1) {
+						euler_quat(p->rot, o);
+						/* keep neighbouring quaternions in the same hemisphere so slerp takes the short way */
+						if (i && o[0] * prev[0] + o[1] * prev[1] + o[2] * prev[2] + o[3] * prev[3] < 0)
+							for (int k = 0; k < 4; k++) o[k] = -o[k];
+						memcpy(prev, o, sizeof prev);
+						moved |= differs(p->rot, r->rot, 3, 1e-3f);
+					} else {
+						memcpy(o, p->scale, sizeof p->scale);
+						moved |= differs(p->scale, r->scale, 3, 1e-4f);
+					}
+				}
+				if (!moved) continue;
+				if (!have_time) {
+					time_acc = add_float_acc(g, a->times, ns, 1, 1);
+					have_time = 1;
+				}
+				size_t out = add_float_acc(g, buf, ns, nc, 0);
+				static const char *paths[3] = {"translation", "rotation", "scale"};
+				sb_printf(&samps, "%s{\"input\":%zu,\"output\":%zu,\"interpolation\":\"LINEAR\"}",
+						  nsamp ? "," : "", time_acc, out);
+				sb_printf(&chans, "%s{\"sampler\":%zu,\"target\":{\"node\":%zu,\"path\":\"%s\"}}",
+						  nsamp ? "," : "", nsamp, b, paths[path]);
+				nsamp++;
+			}
+		}
+		if (nsamp) {
+			sb_printf(&g->anims, "%s{\"name\":\"anim%zu\",\"channels\":[", nanim ? "," : "", ai);
+			sb_add(&g->anims, chans.p, chans.n);
+			sb_printf(&g->anims, "],\"samplers\":[");
+			sb_add(&g->anims, samps.p, samps.n);
+			sb_printf(&g->anims, "],\"extras\":{\"frames\":%u", a->frame_count);
+			if (a->loop_start >= 0)
+				sb_printf(&g->anims, ",\"loopStart\":%.9g,\"loopEnd\":%.9g", a->loop_start, a->loop_end);
+			sb_printf(&g->anims, "}}");
+			nanim++;
+		}
+		free(buf); free(chans.p); free(samps.p);
+	}
+}
+
 /* One mesh per TMD object; Y and Z are negated so +Y is up (a proper rotation, so winding is kept).
- * With a TIM, triangles are split per palette and textured; palette = CLUT row - the TIM's CLUT row. */
-static int write_gltf(const char *path, const psxrom_tmd *t, int binary, const psxrom_tim *tim)
+ * With a TIM, triangles are split per palette and textured; palette = CLUT row - the TIM's CLUT row.
+ * With a skeleton, objects become bone nodes and the animations are exported. */
+static int write_gltf(const char *path, const psxrom_tmd *t, int binary, const psxrom_tim *tim,
+					  const psxrom_mmd_model *skel)
 {
 	struct gltf g = {0};
 	g.binary = binary;
+	g.flip = skel == NULL;
 	g.tim = tim && tim->has_clut && tim->bpp == 4 ? tim : NULL;
 	for (int i = 0; i < 32; i++) g.mat_of[i] = -1;
+	int *mesh_of = malloc((t->num_objects ? t->num_objects : 1) * sizeof *mesh_of);
+	if (!mesh_of) return 0;
+	for (size_t i = 0; i < t->num_objects; i++) mesh_of[i] = -1;
 	sb_printf(&g.materials, "{\"name\":\"vertex\",\"doubleSided\":true,\"pbrMetallicRoughness\":"
 			  "{\"metallicFactor\":0,\"roughnessFactor\":1}}");
 	g.nmat = 1;
@@ -785,16 +925,23 @@ static int write_gltf(const char *path, const psxrom_tmd *t, int binary, const p
 		sb_printf(&g.meshes, "%s{\"name\":\"object%zu\",\"primitives\":[", g.nmesh ? "," : "", o);
 		if (prims.p) sb_add(&g.meshes, prims.p, prims.n);
 		sb_add(&g.meshes, "]}", 2);
-		sb_printf(&g.nodes, "%s{\"mesh\":%zu,\"name\":\"object%zu\"}", g.nmesh ? "," : "", g.nmesh, o);
+		if (!skel) sb_printf(&g.nodes, "%s{\"mesh\":%zu,\"name\":\"object%zu\"}", g.nmesh ? "," : "", g.nmesh, o);
+		mesh_of[o] = (int)g.nmesh;
 		g.nmesh++;
 		free(prims.p);
+	}
+
+	if (skel && ok) {
+		build_skeleton(&g, skel, mesh_of, t->num_objects);
+		build_animations(&g, skel);
 	}
 
 	struct sbuf js = {0};
 	ok = ok && g.bin.p && g.nmesh && g.meshes.p && g.nodes.p;
 	if (ok) {
 		sb_printf(&js, "{\"asset\":{\"version\":\"2.0\",\"generator\":\"psxview\"},\"scene\":0,\"scenes\":[{\"nodes\":[");
-		for (size_t i = 0; i < g.nmesh; i++) sb_printf(&js, "%s%zu", i ? "," : "", i);
+		if (skel) sb_printf(&js, "%zu", skel->bone_count);
+		else for (size_t i = 0; i < g.nmesh; i++) sb_printf(&js, "%s%zu", i ? "," : "", i);
 		sb_printf(&js, "]}],\"nodes\":[");   sb_add(&js, g.nodes.p, g.nodes.n);
 		sb_printf(&js, "],\"meshes\":[");    sb_add(&js, g.meshes.p, g.meshes.n);
 		sb_printf(&js, "],\"materials\":["); sb_add(&js, g.materials.p, g.materials.n);
@@ -803,6 +950,7 @@ static int write_gltf(const char *path, const psxrom_tmd *t, int binary, const p
 			sb_printf(&js, ",\"textures\":["); sb_add(&js, g.textures.p, g.textures.n);
 			sb_printf(&js, "],\"images\":[");   sb_add(&js, g.images.p, g.images.n);
 		}
+		if (g.anims.p) { sb_printf(&js, "],\"animations\":["); sb_add(&js, g.anims.p, g.anims.n); }
 		sb_printf(&js, "],\"accessors\":[");   sb_add(&js, g.accs.p, g.accs.n);
 		sb_printf(&js, "],\"bufferViews\":["); sb_add(&js, g.views.p, g.views.n);
 		sb_printf(&js, "],\"buffers\":[{\"byteLength\":%zu", g.bin.n);
@@ -831,7 +979,8 @@ static int write_gltf(const char *path, const psxrom_tmd *t, int binary, const p
 		ok = write_file(path, js.p, js.n);
 	}
 	free(g.bin.p); free(js.p); free(g.views.p); free(g.accs.p); free(g.meshes.p);
-	free(g.nodes.p); free(g.materials.p); free(g.textures.p); free(g.images.p);
+	free(g.nodes.p); free(g.materials.p); free(g.textures.p); free(g.images.p); free(g.anims.p);
+	free(mesh_of);
 	return ok;
 }
 
@@ -844,11 +993,17 @@ static int ext_is(const char *path, const char *ext)
 	return 1;
 }
 
+static int write_model_skel(const char *path, const psxrom_tmd *t, const psxrom_tim *tim,
+							const psxrom_mmd_model *skel)
+{
+	if (ext_is(path, ".glb")) return write_gltf(path, t, 1, tim, skel);
+	if (ext_is(path, ".gltf")) return write_gltf(path, t, 0, tim, skel);
+	return write_obj(path, t);
+}
+
 static int write_model(const char *path, const psxrom_tmd *t, const psxrom_tim *tim)
 {
-	if (ext_is(path, ".glb")) return write_gltf(path, t, 1, tim);
-	if (ext_is(path, ".gltf")) return write_gltf(path, t, 0, tim);
-	return write_obj(path, t);
+	return write_model_skel(path, t, tim, NULL);
 }
 
 static void describe_tmd(const psxrom_tmd *t)
@@ -935,19 +1090,26 @@ static psxrom_result dw1_export(struct dw1_ctx *c, size_t i, const char *out)
 	if (r != PSXROM_OK) return r;
 
 	psxrom_tmd t;
-	r = psxrom_mmd_parse(data, n, dg->nodes, dg->bone_count, &t);
+	psxrom_mmd_model model;
+	int skel = (ext_is(out, ".glb") || ext_is(out, ".gltf")) && dg->bone_count > 0 &&
+			   psxrom_mmd_load(data, n, dg->nodes, dg->bone_count, &model) == PSXROM_OK;
+	if (skel) r = PSXROM_OK;
+	else r = psxrom_mmd_parse(data, n, dg->nodes, dg->bone_count, &t);
 	free(data);
 	if (r != PSXROM_OK) return r;
+	const psxrom_tmd *tmd = skel ? &model.tmd : &t;
 
 	psxrom_tim tim;
 	const psxrom_tim *tp = NULL;
 	if ((i + 1) * DW1_TIM_SIZE <= c->alltim_size &&
 		psxrom_tim_parse(c->alltim + i * DW1_TIM_SIZE, DW1_TIM_SIZE, &tim) == PSXROM_OK)
 		tp = &tim;
-	if (!write_model(out, &t, tp)) r = PSXROM_ERR_IO;
-	printf("%s: %zu bone(s), %zu triangle(s)%s -> %s\n", dg->name, (size_t)dg->bone_count,
-		   t.num_objects ? t.objects[0].num_tris : 0, tp ? ", textured" : "", out);
-	psxrom_tmd_free(&t);
+	if (!write_model_skel(out, tmd, tp, skel ? &model : NULL)) r = PSXROM_ERR_IO;
+	printf("%s: %zu bone(s), %zu triangle(s)%s%s -> %s\n", dg->name, (size_t)dg->bone_count,
+		   tmd->num_objects ? tmd->objects[0].num_tris : 0, tp ? ", textured" : "",
+		   skel ? ", animated" : "", out);
+	if (skel) psxrom_mmd_free(&model);
+	else psxrom_tmd_free(&t);
 	return r;
 }
 

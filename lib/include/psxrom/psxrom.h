@@ -196,6 +196,35 @@ void psxrom_dw1_free_digimon(psxrom_dw1_digimon *d, size_t count);
 psxrom_result psxrom_mmd_parse(const uint8_t *data, size_t size,
                                const psxrom_dw1_node *nodes, size_t bone_count, psxrom_tmd *out);
 
+/* Skeleton and animation data of one MMD, with the TMD objects left unmerged. */
+typedef struct {
+    float scale[3];
+    float rot[3];           /* degrees, matrix = Rx * Ry * Rz */
+    float pos[3];
+} psxrom_mmd_pose;
+
+typedef struct {
+    uint32_t frame_count;
+    size_t num_samples;     /* 0 for unused slots */
+    float *times;           /* seconds, strictly increasing (20 frames per second) */
+    psxrom_mmd_pose *poses; /* num_samples * bone_count local poses, linearly interpolated */
+    float loop_start, loop_end; /* seconds; negative unless the animation loops endlessly */
+} psxrom_mmd_anim;
+
+typedef struct {
+    psxrom_tmd tmd;
+    psxrom_dw1_node *nodes;
+    size_t bone_count;
+    psxrom_mmd_pose *rest;  /* bone_count poses: the first animation's initial frame */
+    psxrom_mmd_anim *anims;
+    size_t num_anims;
+} psxrom_mmd_model;
+
+/* Texture-change and sound events in the animation data are skipped. */
+psxrom_result psxrom_mmd_load(const uint8_t *data, size_t size,
+                              const psxrom_dw1_node *nodes, size_t bone_count, psxrom_mmd_model *out);
+void psxrom_mmd_free(psxrom_mmd_model *m);
+
 #ifdef __cplusplus
 }
 #endif
