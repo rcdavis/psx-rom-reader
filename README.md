@@ -49,7 +49,11 @@ build/psxview game.bin xa-all /MOVIE/OP1.STR audio/
 build/psxview game.bin str-info /MOVIE/OP1.STR
 build/psxview game.bin str-frame /MOVIE/OP1.STR 100 frame.bmp
 build/psxview game.bin str-frames /MOVIE/OP1.STR frames/ [first] [count]
+build/psxview game.bin str-y4m /MOVIE/OP1.STR op1.y4m       # uncompressed YUV4MPEG2 video, no ffmpeg needed
+build/psxview game.bin str-convert /MOVIE/OP1.STR op1.webm  # video + XA audio; format chosen by extension
 ```
+
+`str-convert` pipes frames into `ffmpeg` (must be in `PATH`) and muxes the first XA audio stream found in the movie, offset by its sector distance from the first video frame. Y4M files are large (about 300 MB for a two-minute movie); the frame rate is derived from sector spacing since STR files don't store it.
 
 ## Library API (media)
 ```c

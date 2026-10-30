@@ -8,8 +8,15 @@
 #ifdef _WIN32
 #include <direct.h>
 #define MKDIR(p) _mkdir(p)
+#define POPEN_WRITE(c) _popen((c), "wb")
+#define PCLOSE _pclose
+#define SHELL_QUOTE '"'
 #else
+#include <signal.h>
 #define MKDIR(p) mkdir((p), 0777)
+#define POPEN_WRITE(c) popen((c), "w")
+#define PCLOSE pclose
+#define SHELL_QUOTE '\''
 #endif
 
 static void usage(void)
@@ -28,7 +35,9 @@ static void usage(void)
 		  "  xa-all <path> <dir>        decode every XA stream in a file to WAV\n"
 		  "  str-info <path>            frame count and size of a .STR movie\n"
 		  "  str-frame <path> <n> <out.bmp>   decode frame n (0-based) to BMP\n"
-		  "  str-frames <path> <dir> [first] [count]  decode frames to BMP files\n",
+		  "  str-frames <path> <dir> [first] [count]  decode frames to BMP files\n"
+		  "  str-y4m <path> <out.y4m>   write the movie as YUV4MPEG2 video (no audio)\n"
+		  "  str-convert <path> <out>   video + XA audio to webm/mkv/mp4/... (needs ffmpeg in PATH)\n",
 		  stderr);
 }
 
@@ -264,6 +273,214 @@ static psxrom_result cmd_str_frames(psxrom_disc *d, const char *path, const char
 	return (r == PSXROM_OK && !written) ? PSXROM_ERR_NOT_FOUND : r;
 }
 
+struct str_timing {
+	uint16_t width, height;
+	uint32_t frames;
+	uint32_t first_lba, last_lba;
+	uint32_t fps_num, fps_den;
+};
+
+static uint32_t gcd32(uint32_t a, uint32_t b) { while (b) { uint32_t t = a % b; a = b; b = t; } return a; }
+
+/* STR files store no frame rate; derive it from the sector distance between frames (150 sectors/s). */
+static psxrom_result str_timing(psxrom_disc *d, uint32_t lba, uint32_t count, struct str_timing *t)
+{
+	psxrom_str *s;
+	psxrom_result r = psxrom_str_open(d, lba, count, &s);
+	if (r != PSXROM_OK) return r;
+	psxrom_str_frame f;
+	memset(t, 0, sizeof *t);
+	while (psxrom_str_next_frame(s, &f) == PSXROM_OK) {
+		if (!t->frames) { t->width = f.width; t->height = f.height; t->first_lba = f.first_lba; }
+		t->last_lba = f.first_lba;
+		t->frames++;
+	}
+	psxrom_str_close(s);
+	if (!t->frames) return PSXROM_ERR_NOT_FOUND;
+
+	uint32_t num = 15, den = 1;
+	if (t->frames > 1 && t->last_lba > t->first_lba) {
+		num = 150 * (t->frames - 1);
+		den = t->last_lba - t->first_lba;
+		uint32_t g = gcd32(num, den);
+		num /= g;
+		den /= g;
+		uint32_t nearest = (num + den / 2) / den;
+		if (nearest && (double)(num > nearest * den ? num - nearest * den : nearest * den - num) / ((double)nearest * den) < 0.01) {
+			num = nearest;
+			den = 1;
+		}
+	}
+	t->fps_num = num;
+	t->fps_den = den;
+	return PSXROM_OK;
+}
+
+/* RGBA -> planar YCbCr 4:2:0, BT.601 limited range. */
+static void rgba_to_i420(const uint8_t *rgba, uint32_t w, uint32_t h, uint8_t *out)
+{
+	uint32_t cw = (w + 1) / 2, ch = (h + 1) / 2;
+	uint8_t *yp = out, *up = out + (size_t)w * h, *vp = up + (size_t)cw * ch;
+	for (uint32_t y = 0; y < h; y++) {
+		for (uint32_t x = 0; x < w; x++) {
+			const uint8_t *p = rgba + ((size_t)y * w + x) * 4;
+			yp[(size_t)y * w + x] = (uint8_t)((66 * p[0] + 129 * p[1] + 25 * p[2] + 128) / 256 + 16);
+		}
+	}
+	for (uint32_t y = 0; y < ch; y++) {
+		for (uint32_t x = 0; x < cw; x++) {
+			int r = 0, g = 0, b = 0, n = 0;
+			for (uint32_t dy = 0; dy < 2; dy++)
+				for (uint32_t dx = 0; dx < 2; dx++) {
+					uint32_t px = x * 2 + dx, py = y * 2 + dy;
+					if (px >= w || py >= h) continue;
+					const uint8_t *p = rgba + ((size_t)py * w + px) * 4;
+					r += p[0]; g += p[1]; b += p[2]; n++;
+				}
+			r /= n; g /= n; b /= n;
+			int u = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+			int v = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+			up[(size_t)y * cw + x] = (uint8_t)(u < 0 ? 0 : u > 255 ? 255 : u);
+			vp[(size_t)y * cw + x] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+		}
+	}
+}
+
+/* Streams the movie as YUV4MPEG2. Undecodable frames repeat the previous one to keep timing. */
+static psxrom_result write_y4m(psxrom_disc *d, uint32_t lba, uint32_t count,
+							   const struct str_timing *t, FILE *out)
+{
+	uint32_t cw = (t->width + 1) / 2, ch = (t->height + 1) / 2;
+	size_t frame_size = (size_t)t->width * t->height + 2 * (size_t)cw * ch;
+	uint8_t *i420 = calloc(1, frame_size);
+	if (!i420) return PSXROM_ERR_NOMEM;
+	memset(i420, 16, (size_t)t->width * t->height);
+	memset(i420 + (size_t)t->width * t->height, 128, 2 * (size_t)cw * ch);
+
+	psxrom_str *s;
+	psxrom_result r = psxrom_str_open(d, lba, count, &s);
+	if (r != PSXROM_OK) { free(i420); return r; }
+
+	if (fprintf(out, "YUV4MPEG2 W%u H%u F%u:%u Ip A1:1 C420jpeg\n", t->width, t->height,
+				t->fps_num, t->fps_den) < 0)
+		r = PSXROM_ERR_IO;
+
+	psxrom_str_frame f;
+	uint32_t bad = 0;
+	while (r == PSXROM_OK && psxrom_str_next_frame(s, &f) == PSXROM_OK) {
+		uint8_t *rgba;
+		if (f.width == t->width && f.height == t->height &&
+			psxrom_mdec_decode(f.data, f.size, f.width, f.height, &rgba) == PSXROM_OK) {
+			rgba_to_i420(rgba, t->width, t->height, i420);
+			free(rgba);
+		} else {
+			bad++;
+		}
+		if (fputs("FRAME\n", out) < 0 || fwrite(i420, 1, frame_size, out) != frame_size)
+			r = PSXROM_ERR_IO;
+	}
+	if (bad) fprintf(stderr, "warning: %u frame(s) failed to decode and were repeated\n", bad);
+	psxrom_str_close(s);
+	free(i420);
+	if (r == PSXROM_OK && fflush(out) != 0) r = PSXROM_ERR_IO;
+	return r;
+}
+
+static psxrom_result cmd_str_y4m(psxrom_disc *d, const char *path, const char *out_path)
+{
+	uint32_t lba, count;
+	struct str_timing t;
+	psxrom_result r = sector_range(d, path, &lba, &count);
+	if (r == PSXROM_OK) r = str_timing(d, lba, count, &t);
+	if (r != PSXROM_OK) return r;
+	FILE *f = fopen(out_path, "wb");
+	if (!f) return PSXROM_ERR_IO;
+	r = write_y4m(d, lba, count, &t, f);
+	if (fclose(f) != 0 && r == PSXROM_OK) r = PSXROM_ERR_IO;
+	if (r == PSXROM_OK)
+		printf("%ux%u, %u frames at %u/%u fps\n", t.width, t.height, t.frames, t.fps_num, t.fps_den);
+	return r;
+}
+
+/* Appends s to cmd as one shell word; fails on characters that cannot be quoted safely. */
+static int append_arg(char *cmd, size_t cap, const char *s)
+{
+	size_t n = strlen(cmd);
+	size_t len = strlen(s);
+	if (n + len + 4 > cap) return 0;
+	if (strchr(s, SHELL_QUOTE) || strchr(s, '\n') || strchr(s, '%')) return 0;
+	cmd[n++] = ' ';
+	cmd[n++] = SHELL_QUOTE;
+	memcpy(cmd + n, s, len);
+	n += len;
+	cmd[n++] = SHELL_QUOTE;
+	cmd[n] = 0;
+	return 1;
+}
+
+static psxrom_result cmd_str_convert(psxrom_disc *d, const char *path, const char *out_path)
+{
+	uint32_t lba, count;
+	struct str_timing t;
+	psxrom_result r = sector_range(d, path, &lba, &count);
+	if (r == PSXROM_OK) r = str_timing(d, lba, count, &t);
+	if (r != PSXROM_OK) return r;
+
+	/* Audio: first XA stream within the movie, written next to the output. */
+	char wav_path[2048] = "";
+	double audio_offset = 0;
+	psxrom_xa_stream *streams = NULL;
+	size_t nstreams = 0;
+	if (psxrom_disc_has_raw(d) && psxrom_xa_scan(d, lba, count, &streams, &nstreams) == PSXROM_OK && nstreams) {
+		psxrom_xa_pcm pcm;
+		if (psxrom_xa_decode(d, lba, count, streams[0].file, streams[0].channel, &pcm) == PSXROM_OK) {
+			snprintf(wav_path, sizeof wav_path, "%s.audio.wav", out_path);
+			if (!write_wav(wav_path, &pcm)) { psxrom_xa_pcm_free(&pcm); free(streams); return PSXROM_ERR_IO; }
+			audio_offset = ((double)streams[0].first_lba - (double)t.first_lba) / 150.0;
+			printf("audio: file %u channel %u, %.3f s offset\n", streams[0].file, streams[0].channel, audio_offset);
+			psxrom_xa_pcm_free(&pcm);
+		}
+	}
+	free(streams);
+	if (!wav_path[0])
+		fprintf(stderr, "note: no XA audio decoded (needs a raw .bin image); video only\n");
+
+	char cmd[8192] = "ffmpeg -hide_banner -loglevel error -y -f yuv4mpegpipe -i -";
+	char offset[64];
+	int ok = 1;
+	if (wav_path[0]) {
+		snprintf(offset, sizeof offset, "%.6f", audio_offset);
+		strcat(cmd, " -itsoffset");
+		ok = append_arg(cmd, sizeof cmd, offset) && strcat(cmd, " -i") && append_arg(cmd, sizeof cmd, wav_path);
+	}
+	ok = ok && append_arg(cmd, sizeof cmd, out_path);
+	if (!ok) {
+		fprintf(stderr, "paths with quotes, '%%' or newlines are not supported\n");
+		if (wav_path[0]) remove(wav_path);
+		return PSXROM_ERR_IO;
+	}
+
+#ifndef _WIN32
+	signal(SIGPIPE, SIG_IGN);
+#endif
+	FILE *pipe = POPEN_WRITE(cmd);
+	if (!pipe) {
+		fprintf(stderr, "could not start ffmpeg\n");
+		if (wav_path[0]) remove(wav_path);
+		return PSXROM_ERR_IO;
+	}
+	r = write_y4m(d, lba, count, &t, pipe);
+	int status = PCLOSE(pipe);
+	if (wav_path[0]) remove(wav_path);
+	if (status != 0) {
+		fprintf(stderr, "ffmpeg failed (is it installed and does '%s' have a known extension?)\n", out_path);
+		return PSXROM_ERR_IO;
+	}
+	if (r == PSXROM_OK)
+		printf("%s: %ux%u, %u frames at %u/%u fps\n", out_path, t.width, t.height, t.frames, t.fps_num, t.fps_den);
+	return r;
+}
+
 /* Returns 1 and sets *r when cmd is a media (XA/STR) command. */
 static int media_command(psxrom_disc *d, int argc, char **argv, psxrom_result *r)
 {
@@ -296,6 +513,10 @@ static int media_command(psxrom_disc *d, int argc, char **argv, psxrom_result *r
 		*r = cmd_str_info(d, argv[3]);
 	} else if (!strcmp(cmd, "str-frame") && argc >= 6) {
 		*r = cmd_str_frames(d, argv[3], argv[5], 1, (uint32_t)strtoul(argv[4], NULL, 0), 1);
+	} else if (!strcmp(cmd, "str-y4m") && argc >= 5) {
+		*r = cmd_str_y4m(d, argv[3], argv[4]);
+	} else if (!strcmp(cmd, "str-convert") && argc >= 5) {
+		*r = cmd_str_convert(d, argv[3], argv[4]);
 	} else if (!strcmp(cmd, "str-frames") && argc >= 5) {
 		uint32_t first = argc >= 6 ? (uint32_t)strtoul(argv[5], NULL, 0) : 0;
 		uint32_t num = argc >= 7 ? (uint32_t)strtoul(argv[6], NULL, 0) : 0xFFFFFFFFu;
