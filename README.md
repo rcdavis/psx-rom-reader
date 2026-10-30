@@ -1,7 +1,7 @@
 # psx-rom-reader
 Reads assets in a PSX rom. The repository is organized as a CMake superproject containing a dependency-free C99 library (`lib/`) and a command line viewer (`viewer/`).
 
-Supports `.iso` (2048) and raw `.bin`/`.img` (2352 / 2336 byte sectors) images, ISO9660 browsing/extraction, TIM texture decoding, CD-XA ADPCM audio decoding, and STR movie (MDEC v2/v3) frame decoding.
+Supports `.iso` (2048) and raw `.bin`/`.img` (2352 / 2336 byte sectors) images, ISO9660 browsing/extraction, TIM texture decoding, CD-XA ADPCM audio decoding, STR movie (MDEC v2/v3) frame decoding, and TMD 3D model parsing with glTF/GLB/OBJ export.
 
 XA audio needs a raw image (`.bin`) because plain `.iso` files drop the Mode 2 subheaders. STR video also works on `.iso`.
 
@@ -51,6 +51,8 @@ build/psxview game.bin str-frame /MOVIE/OP1.STR 100 frame.bmp
 build/psxview game.bin str-frames /MOVIE/OP1.STR frames/ [first] [count]
 build/psxview game.bin str-y4m /MOVIE/OP1.STR op1.y4m       # uncompressed YUV4MPEG2 video, no ffmpeg needed
 build/psxview game.bin str-convert /MOVIE/OP1.STR op1.webm  # video + XA audio; format chosen by extension
+build/psxview game.bin tmd /DOOR/DOOR00.TMD door.glb      # summary + export; format by extension: .glb .gltf .obj
+build/psxview game.bin tmd-all models/ [glb|gltf|obj]      # every .TMD on the disc (default glb)
 ```
 
 `str-convert` pipes frames into `ffmpeg` (must be in `PATH`) and muxes the first XA audio stream found in the movie, offset by its sector distance from the first video frame. Y4M files are large (about 300 MB for a two-minute movie); the frame rate is derived from sector spacing since STR files don't store it.
@@ -62,3 +64,7 @@ psxrom_str_open / psxrom_str_next_frame / psxrom_mdec_decode   /* STR -> RGBA fr
 psxrom_disc_read_raw                /* Mode 2 subheader + payload of a sector */
 ```
 Notes: MDEC bitstream version 3 was verified against a real disc; version 2 follows the hardware layout but is untested. Decoding uses a floating-point IDCT, so output is visually correct but not bit-exact with the console.
+
+### TMD notes
+
+`psxrom_tmd_parse` handles standard TMD files (id `0x41`, non-fixed addresses): flat/Gouraud, textured/untextured triangles and quads (quads are split in two). Lines and sprites are skipped. Export (glTF 2.0 `.glb`/`.gltf`, or OBJ) negates Y and Z so models are upright, with one mesh per TMD object carrying positions, normals, vertex colours and UVs. `.gltf` embeds its data as a base64 URI. UVs are per texture page; no VRAM texturing or materials are produced. Digimon World's `.MMD` files are a different, undocumented container and are not supported.

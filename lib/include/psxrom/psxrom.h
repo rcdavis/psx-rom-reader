@@ -139,6 +139,38 @@ psxrom_result psxrom_str_next_frame(psxrom_str *s, psxrom_str_frame *frame);
 psxrom_result psxrom_mdec_decode(const uint8_t *data, size_t size,
                                  uint16_t width, uint16_t height, uint8_t **rgba);
 
+/* ---- TMD 3D models ---- */
+
+typedef struct {
+    float pos[3];           /* PSX units with the object scale applied; +Y is down */
+    float normal[3];        /* unit length; face normal when the file has none */
+    float uv[2];            /* texel coordinates, 0..255 inside the texture page */
+    uint8_t color[3];
+} psxrom_tmd_vertex;
+
+typedef struct {
+    psxrom_tmd_vertex v[3];
+    uint8_t textured;
+    uint8_t double_sided;
+    uint16_t tsb;           /* texture page, mix rate and colour mode */
+    uint16_t clut;          /* palette position in VRAM */
+} psxrom_tmd_tri;
+
+typedef struct {
+    psxrom_tmd_tri *tris;   /* polygons only; quads are split in two */
+    size_t num_tris;
+} psxrom_tmd_object;
+
+typedef struct {
+    psxrom_tmd_object *objects;
+    size_t num_objects;
+} psxrom_tmd;
+
+/* Parses a standard TMD (id 0x41, offsets relative to the object table).
+   Lines and sprites are skipped. Free the result with psxrom_tmd_free. */
+psxrom_result psxrom_tmd_parse(const uint8_t *data, size_t size, psxrom_tmd *out);
+void psxrom_tmd_free(psxrom_tmd *tmd);
+
 #ifdef __cplusplus
 }
 #endif

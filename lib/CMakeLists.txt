@@ -6,7 +6,7 @@ add_library(psxrom
     src/iso9660.c
     src/tim.c
     src/xa.c
-    src/str.c
+    src/str.c src/tmd.c
 )
 
 add_library(psxrom::psxrom ALIAS psxrom)
