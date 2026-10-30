@@ -9,12 +9,12 @@ extern "C" {
 #endif
 
 typedef enum {
-    PSXROM_OK = 0,
-    PSXROM_ERR_IO,
-    PSXROM_ERR_FORMAT,
-    PSXROM_ERR_NOT_FOUND,
-    PSXROM_ERR_NOMEM,
-    PSXROM_ERR_RANGE
+	PSXROM_OK = 0,
+	PSXROM_ERR_IO,
+	PSXROM_ERR_FORMAT,
+	PSXROM_ERR_NOT_FOUND,
+	PSXROM_ERR_NOMEM,
+	PSXROM_ERR_RANGE
 } psxrom_result;
 
 const char *psxrom_strerror(psxrom_result r);
@@ -32,11 +32,11 @@ uint32_t psxrom_disc_sector_count(const psxrom_disc *d);
 /* ---- ISO9660 filesystem ---- */
 
 typedef struct {
-    char name[256];     /* no ";1" version suffix */
-    char path[1024];    /* full path, '/' separated, leading '/' */
-    uint32_t lba;
-    uint32_t size;
-    int is_dir;
+	char name[256];     /* no ";1" version suffix */
+	char path[1024];    /* full path, '/' separated, leading '/' */
+	uint32_t lba;
+	uint32_t size;
+	int is_dir;
 } psxrom_entry;
 
 /* Return non-zero to stop iteration. */
@@ -46,23 +46,23 @@ psxrom_result psxrom_walk(psxrom_disc *d, psxrom_walk_cb cb, void *user);
 psxrom_result psxrom_find(psxrom_disc *d, const char *path, psxrom_entry *out);
 /* Allocates *data (free with free()). */
 psxrom_result psxrom_read_file(psxrom_disc *d, const psxrom_entry *e,
-                               uint8_t **data, size_t *size);
+							   uint8_t **data, size_t *size);
 /* Copies the volume label (trimmed) into out. */
 psxrom_result psxrom_volume_label(psxrom_disc *d, char *out, size_t out_size);
 
 /* ---- TIM textures ---- */
 
 typedef struct {
-    uint32_t bpp;            /* 4, 8, 16 or 24 */
-    int has_clut;
-    uint16_t clut_x, clut_y, clut_w, clut_h;
-    uint16_t img_x, img_y;
-    uint16_t width;          /* in pixels (not VRAM words) */
-    uint16_t height;
-    uint32_t num_cluts;      /* clut_h palettes of clut_w entries */
-    const uint8_t *clut;     /* points into the input buffer */
-    const uint8_t *pixels;
-    size_t pixels_size;
+	uint32_t bpp;            /* 4, 8, 16 or 24 */
+	int has_clut;
+	uint16_t clut_x, clut_y, clut_w, clut_h;
+	uint16_t img_x, img_y;
+	uint16_t width;          /* in pixels (not VRAM words) */
+	uint16_t height;
+	uint32_t num_cluts;      /* clut_h palettes of clut_w entries */
+	const uint8_t *clut;     /* points into the input buffer */
+	const uint8_t *pixels;
+	size_t pixels_size;
 } psxrom_tim;
 
 psxrom_result psxrom_tim_parse(const uint8_t *data, size_t size, psxrom_tim *out);
