@@ -171,6 +171,31 @@ typedef struct {
 psxrom_result psxrom_tmd_parse(const uint8_t *data, size_t size, psxrom_tmd *out);
 void psxrom_tmd_free(psxrom_tmd *tmd);
 
+/* ---- Digimon World models (.MMD) ---- */
+
+typedef struct {
+    uint8_t object;         /* TMD object drawn by this node, 255 for none */
+    uint8_t parent;         /* parent node index, 255 for a root */
+} psxrom_dw1_node;
+
+typedef struct {
+    char name[9];           /* file name without extension, e.g. "AGUM" */
+    uint32_t bone_count;
+    psxrom_dw1_node *nodes;
+} psxrom_dw1_digimon;
+
+/* Reads the Digimon name and skeleton tables from the US executable (SLUS_010.32).
+   Entry i uses /CHDAT/MMD<i/30>/<name>.MMD and the i-th 0x4800-byte TIM of /CHDAT/ALLTIM.TIM. */
+psxrom_result psxrom_dw1_load_digimon(const uint8_t *exe, size_t size,
+                                      psxrom_dw1_digimon **out, size_t *count);
+void psxrom_dw1_free_digimon(psxrom_dw1_digimon *d, size_t count);
+
+/* An MMD is [tmd offset][animation offset] followed by a TMD and the animation data.
+   With nodes, the skeleton is posed using the first animation's initial frame and the
+   result is a single object; without nodes the TMD objects are returned unchanged. */
+psxrom_result psxrom_mmd_parse(const uint8_t *data, size_t size,
+                               const psxrom_dw1_node *nodes, size_t bone_count, psxrom_tmd *out);
+
 #ifdef __cplusplus
 }
 #endif

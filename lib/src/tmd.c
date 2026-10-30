@@ -91,25 +91,27 @@ static psxrom_result parse_object(const uint8_t *base, size_t avail, const uint8
         if (cc == 1) for (unsigned i = 1; i < 4; i++) memcpy(col[i], col[0], 3);
 
         psxrom_tmd_vertex pv[4];
+        /* a few game files reference normals past the declared table; recompute those from the geometry */
         int has_normal = nc > 0;
         for (unsigned i = 0; i < vc; i++) {
             unsigned ni = 0;
             if (i < nc) { ni = rd16(q); q += 2; }
             unsigned vi = rd16(q); q += 2;
-            if (vi >= n_vert || (i < nc && ni >= n_norm)) goto bad;
+            if (vi >= n_vert) goto bad;
+            if (i < nc && ni >= n_norm) has_normal = 0;
 
             const uint8_t *vp = base + vert_top + (size_t)vi * 8;
             for (int k = 0; k < 3; k++) pv[i].pos[k] = (float)rds16(vp + k * 2) * mul;
             memcpy(pv[i].color, col[i], 3);
             pv[i].uv[0] = u[i]; pv[i].uv[1] = v[i];
             memset(pv[i].normal, 0, sizeof pv[i].normal);
-            if (i < nc) {
+            if (i < nc && ni < n_norm) {
                 const uint8_t *np = base + norm_top + (size_t)ni * 8;
                 for (int k = 0; k < 3; k++) pv[i].normal[k] = (float)rds16(np + k * 2) / 4096.0f;
             }
         }
         /* flat polygons carry a single normal that applies to every vertex */
-        if (nc == 1) for (unsigned i = 1; i < vc; i++) memcpy(pv[i].normal, pv[0].normal, sizeof pv[i].normal);
+        if (nc == 1 && has_normal) for (unsigned i = 1; i < vc; i++) memcpy(pv[i].normal, pv[0].normal, sizeof pv[i].normal);
 
         static const unsigned idx[2][3] = {{0, 1, 2}, {2, 1, 3}};
         for (unsigned t = 0; t < (quad ? 2u : 1u); t++) {

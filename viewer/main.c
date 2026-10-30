@@ -40,6 +40,9 @@ static void usage(void)
 		  "  str-y4m <path> <out.y4m>   write the movie as YUV4MPEG2 video (no audio)\n"
 		  "  tmd <path> [out.obj]       summarize a TMD model; export by extension: .glb .gltf .obj\n"
 		  "  tmd-all <dir> [glb|gltf|obj]  export every .TMD file into dir (default glb)\n"
+		  "  mmd-list                   list Digimon World models (needs the US SLUS_010.32)\n"
+		  "  mmd <name|index> <out>     export a posed, textured Digimon model (.glb .gltf .obj)\n"
+		  "  mmd-all <dir> [glb|gltf|obj]  export every Digimon model\n"
 		  "  str-convert <path> <out>   video + XA audio to webm/mkv/mp4/... (needs ffmpeg in PATH)\n",
 		  stderr);
 }
@@ -572,80 +575,240 @@ static void sb_base64(struct sbuf *b, const uint8_t *d, size_t n)
 	}
 }
 
-/* One mesh per TMD object; Y and Z are negated so +Y is up (a proper rotation, so winding is kept). */
-static int write_gltf(const char *path, const psxrom_tmd *t, int binary)
+static uint32_t crc32_update(uint32_t crc, const uint8_t *d, size_t n)
 {
-	struct sbuf bin = {0}, js = {0};
-	size_t nmesh = 0;
-	sb_printf(&js, "{\"asset\":{\"version\":\"2.0\",\"generator\":\"psxview\"},"
-				   "\"materials\":[{\"doubleSided\":true,\"pbrMetallicRoughness\":"
-				   "{\"metallicFactor\":0,\"roughnessFactor\":1}}],");
-	struct sbuf views = {0}, accs = {0}, meshes = {0}, nodes = {0};
-	size_t nviews = 0;
-	for (size_t o = 0; o < t->num_objects; o++) {
+	static uint32_t table[256];
+	if (!table[1]) {
+		for (uint32_t i = 0; i < 256; i++) {
+			uint32_t c = i;
+			for (int k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+			table[i] = c;
+		}
+	}
+	crc = ~crc;
+	for (size_t i = 0; i < n; i++) crc = table[(crc ^ d[i]) & 0xFF] ^ (crc >> 8);
+	return ~crc;
+}
+
+static void png_chunk(struct sbuf *b, const char *type, const uint8_t *d, size_t n)
+{
+	uint8_t be[4] = {(uint8_t)(n >> 24), (uint8_t)(n >> 16), (uint8_t)(n >> 8), (uint8_t)n};
+	sb_add(b, be, 4);
+	sb_add(b, type, 4);
+	if (n) sb_add(b, d, n);
+	uint32_t crc = crc32_update(crc32_update(0, (const uint8_t *)type, 4), d, n);
+	uint8_t c[4] = {(uint8_t)(crc >> 24), (uint8_t)(crc >> 16), (uint8_t)(crc >> 8), (uint8_t)crc};
+	sb_add(b, c, 4);
+}
+
+/* PNG with an uncompressed (stored) deflate stream, which needs no zlib. */
+static int png_encode_rgba(struct sbuf *out, const uint8_t *rgba, uint32_t w, uint32_t h)
+{
+	size_t row = (size_t)w * 4 + 1, raw_n = row * h;
+	uint8_t *raw = malloc(raw_n);
+	if (!raw) return 0;
+	for (uint32_t y = 0; y < h; y++) {
+		raw[y * row] = 0;
+		memcpy(raw + y * row + 1, rgba + (size_t)y * w * 4, (size_t)w * 4);
+	}
+
+	struct sbuf z = {0};
+	sb_add(&z, "\x78\x01", 2);
+	uint32_t a = 1, bsum = 0;
+	for (size_t i = 0; i < raw_n; i++) { a = (a + raw[i]) % 65521u; bsum = (bsum + a) % 65521u; }
+	for (size_t pos = 0; pos < raw_n || pos == 0;) {
+		size_t n = raw_n - pos > 65535 ? 65535 : raw_n - pos;
+		uint8_t hdr[5] = {pos + n >= raw_n, (uint8_t)n, (uint8_t)(n >> 8), (uint8_t)~n, (uint8_t)(~n >> 8)};
+		sb_add(&z, hdr, 5);
+		sb_add(&z, raw + pos, n);
+		pos += n;
+		if (!n) break;
+	}
+	uint32_t ad = (bsum << 16) | a;
+	uint8_t adb[4] = {(uint8_t)(ad >> 24), (uint8_t)(ad >> 16), (uint8_t)(ad >> 8), (uint8_t)ad};
+	sb_add(&z, adb, 4);
+	free(raw);
+	if (!z.p) return 0;
+
+	uint8_t ihdr[13] = {(uint8_t)(w >> 24), (uint8_t)(w >> 16), (uint8_t)(w >> 8), (uint8_t)w,
+						(uint8_t)(h >> 24), (uint8_t)(h >> 16), (uint8_t)(h >> 8), (uint8_t)h, 8, 6, 0, 0, 0};
+	sb_add(out, "\x89PNG\r\n\x1a\n", 8);
+	png_chunk(out, "IHDR", ihdr, sizeof ihdr);
+	png_chunk(out, "IDAT", (const uint8_t *)z.p, z.n);
+	png_chunk(out, "IEND", NULL, 0);
+	free(z.p);
+	return out->p != NULL;
+}
+
+struct gltf {
+	struct sbuf bin, views, accs, meshes, nodes, materials, textures, images;
+	size_t nviews, naccs, nmesh, nmat, nimg;
+	int binary;
+	const psxrom_tim *tim;
+	int mat_of[32];
+};
+
+static void bin_align(struct gltf *g)
+{
+	static const char zero[4] = {0};
+	sb_add(&g->bin, zero, (4 - g->bin.n % 4) % 4);
+}
+
+static size_t add_view(struct gltf *g, size_t off, size_t len, int vertex)
+{
+	sb_printf(&g->views, "%s{\"buffer\":0,\"byteOffset\":%zu,\"byteLength\":%zu%s}", g->nviews ? "," : "",
+			  off, len, vertex ? ",\"target\":34962" : "");
+	return g->nviews++;
+}
+
+/* Returns the material index for a palette (-1 = untextured), creating it on first use. */
+static int get_material(struct gltf *g, int palette)
+{
+	if (palette < 0) return 0;
+	if (g->mat_of[palette] >= 0) return g->mat_of[palette];
+
+	uint8_t *rgba = NULL;
+	struct sbuf png = {0};
+	if (psxrom_tim_to_rgba(g->tim, (uint32_t)palette, &rgba) != PSXROM_OK) return 0;
+	int ok = png_encode_rgba(&png, rgba, g->tim->width, g->tim->height);
+	free(rgba);
+	if (!ok) { free(png.p); return 0; }
+
+	if (g->binary) {
+		bin_align(g);
+		size_t off = g->bin.n;
+		sb_add(&g->bin, png.p, png.n);
+		size_t view = add_view(g, off, png.n, 0);
+		sb_printf(&g->images, "%s{\"bufferView\":%zu,\"mimeType\":\"image/png\"}", g->nimg ? "," : "", view);
+	} else {
+		sb_printf(&g->images, "%s{\"mimeType\":\"image/png\",\"uri\":\"data:image/png;base64,", g->nimg ? "," : "");
+		sb_base64(&g->images, (const uint8_t *)png.p, png.n);
+		sb_printf(&g->images, "\"}");
+	}
+	free(png.p);
+	sb_printf(&g->textures, "%s{\"sampler\":0,\"source\":%zu}", g->nimg ? "," : "", g->nimg);
+	sb_printf(&g->materials, ",{\"name\":\"palette%d\",\"doubleSided\":true,\"alphaMode\":\"MASK\","
+			  "\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":%zu},\"metallicFactor\":0,\"roughnessFactor\":1}}",
+			  palette, g->nimg);
+	g->nimg++;
+	g->nmat++;
+	return g->mat_of[palette] = (int)g->nmat - 1;
+}
+
+/* Appends one primitive (JSON) for a list of triangles. */
+static void add_primitive(struct gltf *g, struct sbuf *prims, const psxrom_tmd_tri *tris, size_t ntris,
+						  int material, int first)
+{
+	size_t count = ntris * 3;
+	float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
+	size_t acc0 = g->naccs;
+	static const char *names[4] = {"POSITION", "NORMAL", "COLOR_0", "TEXCOORD_0"};
+	static const char *types[4] = {"VEC3", "VEC3", "VEC3", "VEC2"};
+	float tw = g->tim ? (float)g->tim->width : 256.0f, th = g->tim ? (float)g->tim->height : 256.0f;
+
+	for (int a = 0; a < 4; a++) {
+		bin_align(g);
+		size_t off = g->bin.n;
+		for (size_t i = 0; i < ntris; i++)
+			for (int k = 0; k < 3; k++) {
+				const psxrom_tmd_vertex *v = &tris[i].v[k];
+				if (a == 0) {
+					float p[3] = {v->pos[0], -v->pos[1], -v->pos[2]};
+					for (int c = 0; c < 3; c++) {
+						if (p[c] < mn[c]) mn[c] = p[c];
+						if (p[c] > mx[c]) mx[c] = p[c];
+						sb_f32(&g->bin, p[c]);
+					}
+				} else if (a == 1) {
+					sb_f32(&g->bin, v->normal[0]); sb_f32(&g->bin, -v->normal[1]); sb_f32(&g->bin, -v->normal[2]);
+				} else if (a == 2) {
+					/* textured polygons use 128 as the neutral modulation colour */
+					float sc = tris[i].textured ? 1.0f / 128.0f : 1.0f / 255.0f;
+					for (int c = 0; c < 3; c++) {
+						float f = v->color[c] * sc;
+						sb_f32(&g->bin, f > 1.0f ? 1.0f : f);
+					}
+				} else {
+					sb_f32(&g->bin, v->uv[0] / tw); sb_f32(&g->bin, v->uv[1] / th);
+				}
+			}
+		size_t view = add_view(g, off, g->bin.n - off, 1);
+		sb_printf(&g->accs, "%s{\"bufferView\":%zu,\"componentType\":5126,\"count\":%zu,\"type\":\"%s\"",
+				  g->naccs ? "," : "", view, count, types[a]);
+		if (a == 0)
+			sb_printf(&g->accs, ",\"min\":[%.9g,%.9g,%.9g],\"max\":[%.9g,%.9g,%.9g]",
+					  mn[0], mn[1], mn[2], mx[0], mx[1], mx[2]);
+		sb_add(&g->accs, "}", 1);
+		g->naccs++;
+	}
+	sb_printf(prims, "%s{\"attributes\":{\"%s\":%zu,\"%s\":%zu,\"%s\":%zu,\"%s\":%zu},\"material\":%d,\"mode\":4}",
+			  first ? "" : ",", names[0], acc0, names[1], acc0 + 1, names[2], acc0 + 2, names[3], acc0 + 3, material);
+}
+
+/* One mesh per TMD object; Y and Z are negated so +Y is up (a proper rotation, so winding is kept).
+ * With a TIM, triangles are split per palette and textured; palette = CLUT row - the TIM's CLUT row. */
+static int write_gltf(const char *path, const psxrom_tmd *t, int binary, const psxrom_tim *tim)
+{
+	struct gltf g = {0};
+	g.binary = binary;
+	g.tim = tim && tim->has_clut && tim->bpp == 4 ? tim : NULL;
+	for (int i = 0; i < 32; i++) g.mat_of[i] = -1;
+	sb_printf(&g.materials, "{\"name\":\"vertex\",\"doubleSided\":true,\"pbrMetallicRoughness\":"
+			  "{\"metallicFactor\":0,\"roughnessFactor\":1}}");
+	g.nmat = 1;
+
+	int npal = g.tim ? (g.tim->num_cluts < 32 ? (int)g.tim->num_cluts : 32) : 0;
+	int ok = 1;
+	for (size_t o = 0; o < t->num_objects && ok; o++) {
 		const psxrom_tmd_object *ob = &t->objects[o];
 		if (!ob->num_tris) continue;
-		size_t count = ob->num_tris * 3;
-		float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
-		size_t off[4], len[4] = {count * 12, count * 12, count * 12, count * 8};
-		for (int a = 0; a < 4; a++) {
-			off[a] = bin.n;
-			for (size_t i = 0; i < ob->num_tris; i++)
-				for (int k = 0; k < 3; k++) {
-					const psxrom_tmd_vertex *v = &ob->tris[i].v[k];
-					if (a == 0) {
-						float p[3] = {v->pos[0], -v->pos[1], -v->pos[2]};
-						for (int c = 0; c < 3; c++) {
-							if (p[c] < mn[c]) mn[c] = p[c];
-							if (p[c] > mx[c]) mx[c] = p[c];
-							sb_f32(&bin, p[c]);
-						}
-					} else if (a == 1) {
-						sb_f32(&bin, v->normal[0]); sb_f32(&bin, -v->normal[1]); sb_f32(&bin, -v->normal[2]);
-					} else if (a == 2) {
-						/* textured polygons use 128 as the neutral modulation colour */
-						float sc = ob->tris[i].textured ? 1.0f / 128.0f : 1.0f / 255.0f;
-						for (int c = 0; c < 3; c++) {
-							float f = v->color[c] * sc;
-							sb_f32(&bin, f > 1.0f ? 1.0f : f);
-						}
-					} else {
-						sb_f32(&bin, v->uv[0] / 256.0f); sb_f32(&bin, v->uv[1] / 256.0f);
-					}
+		struct sbuf prims = {0};
+		int first = 1;
+		for (int key = -1; key < npal; key++) {
+			psxrom_tmd_tri *sel = malloc(ob->num_tris * sizeof *sel);
+			size_t n = 0;
+			if (!sel) { ok = 0; break; }
+			for (size_t i = 0; i < ob->num_tris; i++) {
+				int pal = -1;
+				if (g.tim && ob->tris[i].textured) {
+					int row = ((ob->tris[i].clut >> 6) & 0x1FF) - (int)g.tim->clut_y;
+					if (row >= 0 && row < npal) pal = row;
 				}
+				if (pal == key) sel[n++] = ob->tris[i];
+			}
+			if (n) {
+				add_primitive(&g, &prims, sel, n, get_material(&g, key), first);
+				first = 0;
+			}
+			free(sel);
 		}
-		static const char *names[4] = {"POSITION", "NORMAL", "COLOR_0", "TEXCOORD_0"};
-		static const char *types[4] = {"VEC3", "VEC3", "VEC3", "VEC2"};
-		for (int a = 0; a < 4; a++) {
-			sb_printf(&views, "%s{\"buffer\":0,\"byteOffset\":%zu,\"byteLength\":%zu,\"target\":34962}",
-					  nviews ? "," : "", off[a], len[a]);
-			sb_printf(&accs, "%s{\"bufferView\":%zu,\"componentType\":5126,\"count\":%zu,\"type\":\"%s\"",
-					  nviews ? "," : "", nviews, count, types[a]);
-			if (a == 0)
-				sb_printf(&accs, ",\"min\":[%.9g,%.9g,%.9g],\"max\":[%.9g,%.9g,%.9g]",
-						  mn[0], mn[1], mn[2], mx[0], mx[1], mx[2]);
-			sb_add(&accs, "}", 1);
-			nviews++;
-		}
-		size_t a0 = nviews - 4;
-		sb_printf(&meshes, "%s{\"name\":\"object%zu\",\"primitives\":[{\"attributes\":"
-				  "{\"%s\":%zu,\"%s\":%zu,\"%s\":%zu,\"%s\":%zu},\"material\":0,\"mode\":4}]}",
-				  nmesh ? "," : "", o, names[0], a0, names[1], a0 + 1, names[2], a0 + 2, names[3], a0 + 3);
-		sb_printf(&nodes, "%s{\"mesh\":%zu,\"name\":\"object%zu\"}", nmesh ? "," : "", nmesh, o);
-		nmesh++;
+		sb_printf(&g.meshes, "%s{\"name\":\"object%zu\",\"primitives\":[", g.nmesh ? "," : "", o);
+		if (prims.p) sb_add(&g.meshes, prims.p, prims.n);
+		sb_add(&g.meshes, "]}", 2);
+		sb_printf(&g.nodes, "%s{\"mesh\":%zu,\"name\":\"object%zu\"}", g.nmesh ? "," : "", g.nmesh, o);
+		g.nmesh++;
+		free(prims.p);
 	}
-	int ok = bin.p && nmesh && views.p && accs.p && meshes.p && nodes.p;
+
+	struct sbuf js = {0};
+	ok = ok && g.bin.p && g.nmesh && g.meshes.p && g.nodes.p;
 	if (ok) {
-		sb_printf(&js, "\"scene\":0,\"scenes\":[{\"nodes\":[");
-		for (size_t i = 0; i < nmesh; i++) sb_printf(&js, "%s%zu", i ? "," : "", i);
-		sb_printf(&js, "]}],\"nodes\":["); sb_add(&js, nodes.p, nodes.n);
-		sb_printf(&js, "],\"meshes\":["); sb_add(&js, meshes.p, meshes.n);
-		sb_printf(&js, "],\"accessors\":["); sb_add(&js, accs.p, accs.n);
-		sb_printf(&js, "],\"bufferViews\":["); sb_add(&js, views.p, views.n);
-		sb_printf(&js, "],\"buffers\":[{\"byteLength\":%zu", bin.n);
+		sb_printf(&js, "{\"asset\":{\"version\":\"2.0\",\"generator\":\"psxview\"},\"scene\":0,\"scenes\":[{\"nodes\":[");
+		for (size_t i = 0; i < g.nmesh; i++) sb_printf(&js, "%s%zu", i ? "," : "", i);
+		sb_printf(&js, "]}],\"nodes\":[");   sb_add(&js, g.nodes.p, g.nodes.n);
+		sb_printf(&js, "],\"meshes\":[");    sb_add(&js, g.meshes.p, g.meshes.n);
+		sb_printf(&js, "],\"materials\":["); sb_add(&js, g.materials.p, g.materials.n);
+		if (g.nimg) {
+			sb_printf(&js, "],\"samplers\":[{\"magFilter\":9728,\"minFilter\":9728,\"wrapS\":33071,\"wrapT\":33071}]");
+			sb_printf(&js, ",\"textures\":["); sb_add(&js, g.textures.p, g.textures.n);
+			sb_printf(&js, "],\"images\":[");   sb_add(&js, g.images.p, g.images.n);
+		}
+		sb_printf(&js, "],\"accessors\":[");   sb_add(&js, g.accs.p, g.accs.n);
+		sb_printf(&js, "],\"bufferViews\":["); sb_add(&js, g.views.p, g.views.n);
+		sb_printf(&js, "],\"buffers\":[{\"byteLength\":%zu", g.bin.n);
 		if (!binary) {
 			sb_printf(&js, ",\"uri\":\"data:application/octet-stream;base64,");
-			sb_base64(&js, (const uint8_t *)bin.p, bin.n);
+			sb_base64(&js, (const uint8_t *)g.bin.p, g.bin.n);
 			sb_printf(&js, "\"");
 		}
 		sb_printf(&js, "}]}");
@@ -653,21 +816,22 @@ static int write_gltf(const char *path, const psxrom_tmd *t, int binary)
 	}
 	if (ok && binary) {
 		static const char pad_sp[4] = {' ', ' ', ' ', ' '}, pad_zero[4] = {0, 0, 0, 0};
-		size_t jp = (4 - js.n % 4) % 4, bp = (4 - bin.n % 4) % 4;
+		size_t jp = (4 - js.n % 4) % 4, bp = (4 - g.bin.n % 4) % 4;
 		struct sbuf out = {0};
 		sb_u32(&out, 0x46546C67);
 		sb_u32(&out, 2);
-		sb_u32(&out, (uint32_t)(12 + 8 + js.n + jp + 8 + bin.n + bp));
+		sb_u32(&out, (uint32_t)(12 + 8 + js.n + jp + 8 + g.bin.n + bp));
 		sb_u32(&out, (uint32_t)(js.n + jp)); sb_u32(&out, 0x4E4F534A);
 		sb_add(&out, js.p, js.n); sb_add(&out, pad_sp, jp);
-		sb_u32(&out, (uint32_t)(bin.n + bp)); sb_u32(&out, 0x004E4942);
-		sb_add(&out, bin.p, bin.n); sb_add(&out, pad_zero, bp);
+		sb_u32(&out, (uint32_t)(g.bin.n + bp)); sb_u32(&out, 0x004E4942);
+		sb_add(&out, g.bin.p, g.bin.n); sb_add(&out, pad_zero, bp);
 		ok = out.p && write_file(path, out.p, out.n);
 		free(out.p);
 	} else if (ok) {
 		ok = write_file(path, js.p, js.n);
 	}
-	free(bin.p); free(js.p); free(views.p); free(accs.p); free(meshes.p); free(nodes.p);
+	free(g.bin.p); free(js.p); free(g.views.p); free(g.accs.p); free(g.meshes.p);
+	free(g.nodes.p); free(g.materials.p); free(g.textures.p); free(g.images.p);
 	return ok;
 }
 
@@ -680,10 +844,10 @@ static int ext_is(const char *path, const char *ext)
 	return 1;
 }
 
-static int write_model(const char *path, const psxrom_tmd *t)
+static int write_model(const char *path, const psxrom_tmd *t, const psxrom_tim *tim)
 {
-	if (ext_is(path, ".glb")) return write_gltf(path, t, 1);
-	if (ext_is(path, ".gltf")) return write_gltf(path, t, 0);
+	if (ext_is(path, ".glb")) return write_gltf(path, t, 1, tim);
+	if (ext_is(path, ".gltf")) return write_gltf(path, t, 0, tim);
 	return write_obj(path, t);
 }
 
@@ -716,11 +880,87 @@ static int cb_tmd(const psxrom_entry *e, void *u)
 		char out[2048];
 		snprintf(out, sizeof out, "%s%s.%s", c->dir, e->path, c->ext);
 		mkdirs_for(out);
-		if (write_model(out, &t)) printf("%s\n", out);
+		if (write_model(out, &t, NULL)) printf("%s\n", out);
 		else r = PSXROM_ERR_IO;
 		psxrom_tmd_free(&t);
 	}
 	if (r != PSXROM_OK) { fprintf(stderr, "%s: %s\n", e->path, psxrom_strerror(r)); c->errors++; }
+	return 0;
+}
+
+#define DW1_TIM_SIZE 0x4800u
+
+struct dw1_ctx {
+	psxrom_disc *d;
+	psxrom_dw1_digimon *table;
+	size_t count;
+	uint8_t *alltim;
+	size_t alltim_size;
+};
+
+static psxrom_result dw1_open(psxrom_disc *d, struct dw1_ctx *c)
+{
+	memset(c, 0, sizeof *c);
+	c->d = d;
+	psxrom_entry e;
+	uint8_t *exe;
+	size_t n;
+	psxrom_result r = psxrom_find(d, "/SLUS_010.32", &e);
+	if (r == PSXROM_OK) r = psxrom_read_file(d, &e, &exe, &n);
+	if (r != PSXROM_OK) return r;
+	r = psxrom_dw1_load_digimon(exe, n, &c->table, &c->count);
+	free(exe);
+	if (r != PSXROM_OK) return r;
+	if (psxrom_find(d, "/CHDAT/ALLTIM.TIM", &e) == PSXROM_OK)
+		psxrom_read_file(d, &e, &c->alltim, &c->alltim_size);
+	return PSXROM_OK;
+}
+
+static void dw1_close(struct dw1_ctx *c)
+{
+	psxrom_dw1_free_digimon(c->table, c->count);
+	free(c->alltim);
+}
+
+static psxrom_result dw1_export(struct dw1_ctx *c, size_t i, const char *out)
+{
+	const psxrom_dw1_digimon *dg = &c->table[i];
+	char path[64];
+	snprintf(path, sizeof path, "/CHDAT/MMD%zu/%s.MMD", i / 30, dg->name);
+	psxrom_entry e;
+	uint8_t *data;
+	size_t n;
+	psxrom_result r = psxrom_find(c->d, path, &e);
+	if (r == PSXROM_OK) r = psxrom_read_file(c->d, &e, &data, &n);
+	if (r != PSXROM_OK) return r;
+
+	psxrom_tmd t;
+	r = psxrom_mmd_parse(data, n, dg->nodes, dg->bone_count, &t);
+	free(data);
+	if (r != PSXROM_OK) return r;
+
+	psxrom_tim tim;
+	const psxrom_tim *tp = NULL;
+	if ((i + 1) * DW1_TIM_SIZE <= c->alltim_size &&
+		psxrom_tim_parse(c->alltim + i * DW1_TIM_SIZE, DW1_TIM_SIZE, &tim) == PSXROM_OK)
+		tp = &tim;
+	if (!write_model(out, &t, tp)) r = PSXROM_ERR_IO;
+	printf("%s: %zu bone(s), %zu triangle(s)%s -> %s\n", dg->name, (size_t)dg->bone_count,
+		   t.num_objects ? t.objects[0].num_tris : 0, tp ? ", textured" : "", out);
+	psxrom_tmd_free(&t);
+	return r;
+}
+
+static int dw1_find(const struct dw1_ctx *c, const char *key, size_t *index)
+{
+	char *end;
+	unsigned long v = strtoul(key, &end, 10);
+	if (*key && !*end && v < c->count) { *index = v; return 1; }
+	for (size_t i = 0; i < c->count; i++) {
+		const char *a = c->table[i].name, *b = key;
+		while (*a && *b && toupper((unsigned char)*a) == toupper((unsigned char)*b)) { a++; b++; }
+		if (!*a && !*b) { *index = i; return 1; }
+	}
 	return 0;
 }
 
@@ -745,7 +985,7 @@ static int media_command(psxrom_disc *d, int argc, char **argv, psxrom_result *r
 			psxrom_tmd t;
 			if ((*r = psxrom_tmd_parse(data, n, &t)) == PSXROM_OK) {
 				describe_tmd(&t);
-				if (argc >= 5 && !write_model(argv[4], &t)) *r = PSXROM_ERR_IO;
+				if (argc >= 5 && !write_model(argv[4], &t, NULL)) *r = PSXROM_ERR_IO;
 				psxrom_tmd_free(&t);
 			}
 			free(data);
@@ -755,6 +995,30 @@ static int media_command(psxrom_disc *d, int argc, char **argv, psxrom_result *r
 		MKDIR(argv[3]);
 		*r = psxrom_walk(d, cb_tmd, &c);
 		if (c.errors) *r = PSXROM_ERR_FORMAT;
+	} else if (!strcmp(cmd, "mmd-list") || (!strcmp(cmd, "mmd") && argc >= 5) ||
+			   (!strcmp(cmd, "mmd-all") && argc >= 4)) {
+		struct dw1_ctx c;
+		if ((*r = dw1_open(d, &c)) == PSXROM_OK) {
+			if (!strcmp(cmd, "mmd-list")) {
+				for (size_t i = 0; i < c.count; i++)
+					printf("%3zu  %-8s  %u bone(s)\n", i, c.table[i].name, c.table[i].bone_count);
+			} else if (!strcmp(cmd, "mmd")) {
+				size_t i;
+				if (dw1_find(&c, argv[3], &i)) *r = dw1_export(&c, i, argv[4]);
+				else *r = PSXROM_ERR_NOT_FOUND;
+			} else {
+				const char *ext = argc >= 5 ? argv[4] : "glb";
+				MKDIR(argv[3]);
+				for (size_t i = 0; i < c.count; i++) {
+					char out[2048];
+					snprintf(out, sizeof out, "%s/%s.%s", argv[3], c.table[i].name, ext);
+					psxrom_result e = dw1_export(&c, i, out);
+					if (e != PSXROM_OK && e != PSXROM_ERR_NOT_FOUND)
+						fprintf(stderr, "%s: %s\n", c.table[i].name, psxrom_strerror(e));
+				}
+			}
+			dw1_close(&c);
+		}
 	} else if (!strcmp(cmd, "xa") && argc >= 7) {
 		uint32_t lba, count;
 		psxrom_xa_pcm pcm;
