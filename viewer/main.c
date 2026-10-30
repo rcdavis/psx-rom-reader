@@ -22,7 +22,13 @@ static void usage(void)
 		  "  extract-all <dir>          extract every file into dir\n"
 		  "  tims                       list files that contain a valid TIM texture\n"
 		  "  tim <path> <out.bmp> [n]   describe a TIM and convert it to BMP (palette n)\n"
-		  "  tim-all <dir>              convert every TIM file to BMP in dir\n",
+		  "  tim-all <dir>              convert every TIM file to BMP in dir\n"
+		  "  xa-list [path]             list CD-XA audio streams in a file (default: whole disc)\n"
+		  "  xa <path> <file> <ch> <out.wav>  decode one XA stream to WAV\n"
+		  "  xa-all <path> <dir>        decode every XA stream in a file to WAV\n"
+		  "  str-info <path>            frame count and size of a .STR movie\n"
+		  "  str-frame <path> <n> <out.bmp>   decode frame n (0-based) to BMP\n"
+		  "  str-frames <path> <dir> [first] [count]  decode frames to BMP files\n",
 		  stderr);
 }
 
@@ -130,6 +136,176 @@ static int cb_tims(const psxrom_entry *e, void *u)
 	return 0;
 }
 
+static void put16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+
+static int write_wav(const char *path, const psxrom_xa_pcm *pcm)
+{
+	size_t bytes = pcm->frames * pcm->channels * 2;
+	uint8_t *buf = malloc(44 + bytes);
+	if (!buf) return 0;
+	memcpy(buf, "RIFF", 4);
+	put32(buf + 4, (uint32_t)(36 + bytes));
+	memcpy(buf + 8, "WAVEfmt ", 8);
+	put32(buf + 16, 16);
+	put16(buf + 20, 1);
+	put16(buf + 22, pcm->channels);
+	put32(buf + 24, pcm->sample_rate);
+	put32(buf + 28, pcm->sample_rate * pcm->channels * 2);
+	put16(buf + 32, pcm->channels * 2);
+	put16(buf + 34, 16);
+	memcpy(buf + 36, "data", 4);
+	put32(buf + 40, (uint32_t)bytes);
+	for (size_t i = 0; i < pcm->frames * pcm->channels; i++) /* little-endian samples */
+		put16(buf + 44 + i * 2, (uint16_t)pcm->samples[i]);
+	int ok = write_file(path, buf, 44 + bytes);
+	free(buf);
+	return ok;
+}
+
+/* Sector range of a file, or the whole disc when path is NULL. */
+static psxrom_result sector_range(psxrom_disc *d, const char *path, uint32_t *lba, uint32_t *count)
+{
+	if (!path) {
+		*lba = 0;
+		*count = psxrom_disc_sector_count(d);
+		return PSXROM_OK;
+	}
+	psxrom_entry e;
+	psxrom_result r = psxrom_find(d, path, &e);
+	if (r != PSXROM_OK) return r;
+	*lba = e.lba;
+	*count = (e.size + 2047) / 2048;
+	return PSXROM_OK;
+}
+
+static void print_xa_stream(const psxrom_xa_stream *s)
+{
+	printf("file %3u channel %2u  %s %u Hz %u-bit  %u sectors  first lba %u\n", s->file, s->channel,
+		   s->stereo ? "stereo" : "mono", s->sample_rate, s->bits, s->sectors, s->first_lba);
+}
+
+static psxrom_result cmd_xa_all(psxrom_disc *d, const char *path, const char *dir)
+{
+	uint32_t lba, count;
+	psxrom_xa_stream *streams;
+	size_t n;
+	psxrom_result r = sector_range(d, path, &lba, &count);
+	if (r == PSXROM_OK) r = psxrom_xa_scan(d, lba, count, &streams, &n);
+	if (r != PSXROM_OK) return r;
+	MKDIR(dir);
+	for (size_t i = 0; i < n && r == PSXROM_OK; i++) {
+		psxrom_xa_pcm pcm;
+		char out[2048];
+		if ((r = psxrom_xa_decode(d, lba, count, streams[i].file, streams[i].channel, &pcm)) != PSXROM_OK) break;
+		snprintf(out, sizeof out, "%s/xa_f%u_c%u.wav", dir, streams[i].file, streams[i].channel);
+		if (!write_wav(out, &pcm)) r = PSXROM_ERR_IO;
+		else printf("%s\n", out);
+		psxrom_xa_pcm_free(&pcm);
+	}
+	free(streams);
+	return r;
+}
+
+static psxrom_result cmd_str_info(psxrom_disc *d, const char *path)
+{
+	uint32_t lba, count;
+	psxrom_result r = sector_range(d, path, &lba, &count);
+	psxrom_str *s;
+	if (r != PSXROM_OK || (r = psxrom_str_open(d, lba, count, &s)) != PSXROM_OK) return r;
+	psxrom_str_frame f;
+	uint32_t frames = 0, first = 0, last = 0;
+	uint16_t w = 0, h = 0;
+	while (psxrom_str_next_frame(s, &f) == PSXROM_OK) {
+		if (!frames) { first = f.number; w = f.width; h = f.height; }
+		last = f.number;
+		frames++;
+	}
+	psxrom_str_close(s);
+	if (!frames) return PSXROM_ERR_NOT_FOUND;
+	printf("%ux%u, %u frames (numbers %u-%u), %u sectors", w, h, frames, first, last, count);
+	printf(", %.2f sectors/frame (%.2f fps at 2x speed)\n", (double)count / frames,
+		   150.0 * frames / count);
+	return PSXROM_OK;
+}
+
+static psxrom_result cmd_str_frames(psxrom_disc *d, const char *path, const char *out,
+									int single, uint32_t first, uint32_t num)
+{
+	uint32_t lba, count;
+	psxrom_result r = sector_range(d, path, &lba, &count);
+	psxrom_str *s;
+	if (r != PSXROM_OK || (r = psxrom_str_open(d, lba, count, &s)) != PSXROM_OK) return r;
+	if (!single) MKDIR(out);
+
+	psxrom_str_frame f;
+	uint32_t index = 0, written = 0;
+	while (written < num && psxrom_str_next_frame(s, &f) == PSXROM_OK) {
+		if (index++ < first) continue;
+		uint8_t *rgba;
+		char name[2048];
+		const char *target = out;
+		if (!single) {
+			snprintf(name, sizeof name, "%s/frame_%05u.bmp", out, f.number);
+			target = name;
+		}
+		r = psxrom_mdec_decode(f.data, f.size, f.width, f.height, &rgba);
+		if (r != PSXROM_OK) {
+			fprintf(stderr, "frame %u: %s\n", f.number, psxrom_strerror(r));
+			r = PSXROM_OK;
+			continue;
+		}
+		if (!write_bmp(target, rgba, f.width, f.height)) r = PSXROM_ERR_IO;
+		else printf("%s\n", target);
+		free(rgba);
+		written++;
+		if (r != PSXROM_OK) break;
+	}
+	psxrom_str_close(s);
+	return (r == PSXROM_OK && !written) ? PSXROM_ERR_NOT_FOUND : r;
+}
+
+/* Returns 1 and sets *r when cmd is a media (XA/STR) command. */
+static int media_command(psxrom_disc *d, int argc, char **argv, psxrom_result *r)
+{
+	const char *cmd = argv[2];
+	if (!strcmp(cmd, "xa-list")) {
+		uint32_t lba, count;
+		psxrom_xa_stream *streams;
+		size_t n;
+		*r = sector_range(d, argc >= 4 ? argv[3] : NULL, &lba, &count);
+		if (*r == PSXROM_OK) *r = psxrom_xa_scan(d, lba, count, &streams, &n);
+		if (*r == PSXROM_OK) {
+			for (size_t i = 0; i < n; i++) print_xa_stream(&streams[i]);
+			free(streams);
+		}
+	} else if (!strcmp(cmd, "xa") && argc >= 7) {
+		uint32_t lba, count;
+		psxrom_xa_pcm pcm;
+		*r = sector_range(d, argv[3], &lba, &count);
+		if (*r == PSXROM_OK)
+			*r = psxrom_xa_decode(d, lba, count, (uint8_t)strtoul(argv[4], NULL, 0),
+								  (uint8_t)strtoul(argv[5], NULL, 0), &pcm);
+		if (*r == PSXROM_OK) {
+			printf("%zu frames, %u channel(s), %u Hz\n", pcm.frames, pcm.channels, pcm.sample_rate);
+			if (!write_wav(argv[6], &pcm)) *r = PSXROM_ERR_IO;
+			psxrom_xa_pcm_free(&pcm);
+		}
+	} else if (!strcmp(cmd, "xa-all") && argc >= 5) {
+		*r = cmd_xa_all(d, argv[3], argv[4]);
+	} else if (!strcmp(cmd, "str-info") && argc >= 4) {
+		*r = cmd_str_info(d, argv[3]);
+	} else if (!strcmp(cmd, "str-frame") && argc >= 6) {
+		*r = cmd_str_frames(d, argv[3], argv[5], 1, (uint32_t)strtoul(argv[4], NULL, 0), 1);
+	} else if (!strcmp(cmd, "str-frames") && argc >= 5) {
+		uint32_t first = argc >= 6 ? (uint32_t)strtoul(argv[5], NULL, 0) : 0;
+		uint32_t num = argc >= 7 ? (uint32_t)strtoul(argv[6], NULL, 0) : 0xFFFFFFFFu;
+		*r = cmd_str_frames(d, argv[3], argv[4], 0, first, num);
+	} else {
+		return 0;
+	}
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 3) { usage(); return 2; }
@@ -208,7 +384,7 @@ int main(int argc, char **argv)
 			}
 			free(data);
 		}
-	} else {
+	} else if (!media_command(d, argc, argv, &r)) {
 		usage();
 		psxrom_disc_close(d);
 		return 2;

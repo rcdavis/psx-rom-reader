@@ -5,6 +5,8 @@ add_library(psxrom
     src/disc.c
     src/iso9660.c
     src/tim.c
+    src/xa.c
+    src/str.c
 )
 
 add_library(psxrom::psxrom ALIAS psxrom)
@@ -18,4 +20,8 @@ target_compile_features(psxrom PUBLIC c_std_99)
 
 if(NOT MSVC)
     target_compile_options(psxrom PRIVATE -Wall -Wextra)
+endif()
+
+if(UNIX)
+    target_link_libraries(psxrom PRIVATE m)
 endif()

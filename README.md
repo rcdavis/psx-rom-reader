@@ -1,7 +1,9 @@
 # psx-rom-reader
 Reads assets in a PSX rom. The repository is organized as a CMake superproject containing a dependency-free C99 library (`lib/`) and a command line viewer (`viewer/`).
 
-Supports `.iso` (2048) and raw `.bin`/`.img` (2352 / 2336 byte sectors) images, ISO9660 browsing/extraction, and TIM texture decoding.
+Supports `.iso` (2048) and raw `.bin`/`.img` (2352 / 2336 byte sectors) images, ISO9660 browsing/extraction, TIM texture decoding, CD-XA ADPCM audio decoding, and STR movie (MDEC v2/v3) frame decoding.
+
+XA audio needs a raw image (`.bin`) because plain `.iso` files drop the Mode 2 subheaders. STR video also works on `.iso`.
 
 ## Build everything
 ```sh
@@ -41,4 +43,18 @@ build/psxview game.bin extract /DIR/FILE.TIM out.tim
 build/psxview game.bin extract-all out/
 build/psxview game.bin tim /DIR/ICON.TIM icon.bmp [palette]
 build/psxview game.bin tim-all textures/
+build/psxview game.bin xa-list /MOVIE/OP1.STR          # XA audio streams (file/channel)
+build/psxview game.bin xa /MOVIE/OP1.STR 1 1 out.wav    # decode one stream to WAV
+build/psxview game.bin xa-all /MOVIE/OP1.STR audio/
+build/psxview game.bin str-info /MOVIE/OP1.STR
+build/psxview game.bin str-frame /MOVIE/OP1.STR 100 frame.bmp
+build/psxview game.bin str-frames /MOVIE/OP1.STR frames/ [first] [count]
 ```
+
+## Library API (media)
+```c
+psxrom_xa_scan / psxrom_xa_decode   /* CD-XA ADPCM -> interleaved 16-bit PCM */
+psxrom_str_open / psxrom_str_next_frame / psxrom_mdec_decode   /* STR -> RGBA frames */
+psxrom_disc_read_raw                /* Mode 2 subheader + payload of a sector */
+```
+Notes: MDEC bitstream version 3 was verified against a real disc; version 2 follows the hardware layout but is untested. Decoding uses a floating-point IDCT, so output is visually correct but not bit-exact with the console.

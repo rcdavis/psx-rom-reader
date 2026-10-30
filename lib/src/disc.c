@@ -43,6 +43,7 @@ static int detect_layout(psxrom_disc *d)
 		}
 		d->sector_size = layouts[i].sector;
 		d->data_offset = layouts[i].data;
+		d->has_subheader = layouts[i].data >= 8 && layouts[i].data != 16;
 		return 1;
 	}
 	return 0;
@@ -80,4 +81,27 @@ psxrom_result psxrom_disc_read_sector(psxrom_disc *d, uint32_t lba, uint8_t out[
 	if (lba >= d->sectors) return PSXROM_ERR_RANGE;
 	uint64_t off = (uint64_t)lba * d->sector_size + d->data_offset;
 	return fread_at(d->f, off, out, 2048) ? PSXROM_OK : PSXROM_ERR_IO;
+}
+
+int psxrom_disc_has_raw(const psxrom_disc *d) { return d->has_subheader; }
+
+psxrom_result psxrom_disc_read_raw(psxrom_disc *d, uint32_t lba, psxrom_raw_sector *out)
+{
+    if (lba >= d->sectors) return PSXROM_ERR_RANGE;
+    memset(out, 0, sizeof *out);
+    if (!d->has_subheader) {
+        out->submode = 0x08;
+        out->data_size = 2048;
+        return psxrom_disc_read_sector(d, lba, out->data);
+    }
+    uint8_t buf[8 + 2324];
+    uint64_t off = (uint64_t)lba * d->sector_size + d->data_offset - 8;
+    if (!fread_at(d->f, off, buf, sizeof buf)) return PSXROM_ERR_IO;
+    out->file = buf[0];
+    out->channel = buf[1];
+    out->submode = buf[2];
+    out->coding = buf[3];
+    out->data_size = (out->submode & 0x20) ? 2324 : 2048;
+    memcpy(out->data, buf + 8, out->data_size);
+    return PSXROM_OK;
 }

@@ -9,6 +9,7 @@ struct psxrom_disc {
 	uint32_t sector_size;
 	uint32_t data_offset;
 	uint32_t sectors;
+	int has_subheader;
 };
 
 #include <ctype.h>
