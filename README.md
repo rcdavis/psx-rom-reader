@@ -56,6 +56,8 @@ build/psxview game.bin tmd-all models/ [glb|gltf|obj]      # every .TMD on the d
 build/psxview game.bin mmd-list                              # Digimon World models (US SLUS_010.32 only)
 build/psxview game.bin mmd AGUM agumon.glb                   # posed + textured model, by name or index
 build/psxview game.bin mmd-all models/ [glb|gltf|obj]        # every Digimon model
+build/psxview game.bin map /MAP/MAP1/MAYO01.MAP [prefix]      # describe a map; PNG per palette
+build/psxview game.bin map-all maps/ [palette]                # every map background (default palette 0)
 ```
 
 `str-convert` pipes frames into `ffmpeg` (must be in `PATH`) and muxes the first XA audio stream found in the movie, offset by its sector distance from the first video frame. Y4M files are large (about 300 MB for a two-minute movie); the frame rate is derived from sector spacing since STR files don't store it.
@@ -79,3 +81,7 @@ An MMD is `[tmd offset = 8][animation offset]`, then a standard TMD, then an ani
 `psxrom_mmd_parse` poses the skeleton from the first animation's initial frame (per node: optional scale, XYZ Euler rotation in 1/4096 turns, translation) and merges the parts into one object; this is what `.obj` export uses. `psxrom_mmd_load` instead keeps the bones and runs each animation's keyframe/loop script into per-keyframe poses (`psxrom_mmd_anim`, 20 samples per second of game time).
 
 `mmd`/`mmd-all` with a `.glb`/`.gltf` extension export a node per bone with a PNG-textured material per palette and one glTF animation per MMD animation (`anim<N>`, with `frames`, `loopStart` and `loopEnd` in `extras`). Channels that never leave the rest pose are omitted. Not exported: texture animations (blinking) and sounds. Format knowledge is from SydMontague's [DW1ModelConverter](https://github.com/Operation-Decoded/DW1ModelConverter).
+
+### Digimon World `.MAP` / `.TFS` maps
+
+Areas are pre-rendered 2D backgrounds, not 3D geometry. A `.TFS` is `u16 width, u16 height, u32 palette count`, that many 256-entry 15-bit palettes (several per map, e.g. times of day), then 128x128 8bpp tiles (4-byte header + 16384 indices). A `.MAP` starts with a u32 offset table (setup, optional TIM images and objects, elements, collision); the setup holds camera, lights and the tile grid (`0xFFFFFFFF` = empty cell, other cells consume the TFS tiles in order). The elements hold 10 spawn points, the warp destinations and the Digimon count, followed by a 100x100 collision map. `psxrom_map_parse`, `psxrom_tfs_parse` and `psxrom_map_render` decode these; `map`/`map-all` print the details and write PNGs. Not decoded: sprite objects and their embedded TIMs, roaming Digimon records and map names (which live in the executable). Layout from [DW1ModelConverter](https://github.com/Operation-Decoded/DW1ModelConverter).

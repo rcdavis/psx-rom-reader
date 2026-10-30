@@ -44,6 +44,8 @@ static void usage(void)
 		  "  mmd-list                   list Digimon World models (needs the US SLUS_010.32)\n"
 		  "  mmd <name|index> <out>     export a posed, textured Digimon model (.glb .gltf .obj)\n"
 		  "  mmd-all <dir> [glb|gltf|obj]  export every Digimon model\n"
+		  "  map <path.MAP> [prefix]    describe a Digimon World map; with prefix write <prefix>_<n>.png per palette\n"
+		  "  map-all <dir> [palette]    render every map's background (default palette 0) as PNG\n"
 		  "  str-convert <path> <out>   video + XA audio to webm/mkv/mp4/... (needs ffmpeg in PATH)\n",
 		  stderr);
 }
@@ -1126,6 +1128,104 @@ static int dw1_find(const struct dw1_ctx *c, const char *key, size_t *index)
 	return 0;
 }
 
+/* ---- Digimon World maps ---- */
+
+static int has_map_ext(const char *p)
+{
+	size_t n = strlen(p);
+	return n > 4 && !strcmp(p + n - 4, ".MAP");
+}
+
+static psxrom_result map_load(psxrom_disc *d, const char *path, psxrom_map *m, psxrom_tfs *t)
+{
+	char tfs_path[1024];
+	size_t n = strlen(path);
+	if (n < 4 || n >= sizeof tfs_path) return PSXROM_ERR_NOT_FOUND;
+	memcpy(tfs_path, path, n - 3);
+	strcpy(tfs_path + n - 3, "TFS");
+
+	psxrom_result r = PSXROM_OK;
+	const char *paths[2] = {path, tfs_path};
+	uint8_t *buf[2] = {NULL, NULL};
+	size_t len[2] = {0, 0};
+	for (int i = 0; i < 2 && r == PSXROM_OK; i++) {
+		psxrom_entry e;
+		if ((r = psxrom_find(d, paths[i], &e)) == PSXROM_OK) r = psxrom_read_file(d, &e, &buf[i], &len[i]);
+	}
+	if (r == PSXROM_OK) r = psxrom_map_parse(buf[0], len[0], m);
+	if (r == PSXROM_OK && (r = psxrom_tfs_parse(buf[1], len[1], t)) != PSXROM_OK) psxrom_map_free(m);
+	free(buf[0]); free(buf[1]);
+	return r;
+}
+
+static int write_image(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h)
+{
+	if (!ext_is(path, ".png")) return write_bmp(path, rgba, w, h);
+	struct sbuf png = {0};
+	int ok = png_encode_rgba(&png, rgba, w, h) && write_file(path, png.p, png.n);
+	free(png.p);
+	return ok;
+}
+
+/* Writes <prefix>_<palette>.png for each palette (or just `only` when it is >= 0). */
+static psxrom_result map_render_all(const psxrom_map *m, const psxrom_tfs *t, const char *prefix, int only)
+{
+	for (uint32_t p = 0; p < t->num_palettes; p++) {
+		if (only >= 0 && p != (uint32_t)only) continue;
+		uint8_t *rgba;
+		uint32_t w, h;
+		psxrom_result r = psxrom_map_render(m, t, p, &rgba, &w, &h);
+		if (r != PSXROM_OK) return r;
+		char out[2048];
+		snprintf(out, sizeof out, "%s_%u.png", prefix, p);
+		mkdirs_for(out);
+		int ok = write_image(out, rgba, w, h);
+		free(rgba);
+		if (!ok) return PSXROM_ERR_IO;
+		printf("%s (%ux%u)\n", out, w, h);
+	}
+	return PSXROM_OK;
+}
+
+static void describe_map(const psxrom_map *m, const psxrom_tfs *t)
+{
+	size_t used = 0;
+	for (size_t i = 0; i < (size_t)m->tiles_w * m->tiles_h; i++) used += m->tiles[i] != 0xFFFFFFFFu;
+	printf("background: %ux%u tiles (%zu used, %zu in TFS), %u palette(s)\n", m->tiles_w, m->tiles_h, used,
+		   t->num_tiles, t->num_palettes);
+	printf("camera: origin (%d,%d,%d) target (%d,%d,%d) distance %u\n", m->camera_origin[0], m->camera_origin[1],
+		   m->camera_origin[2], m->camera_target[0], m->camera_target[1], m->camera_target[2], m->view_distance);
+	for (int i = 0; i < 3; i++)
+		printf("light %d: pos (%d,%d,%d) rgb (%u,%u,%u)\n", i, m->lights[i].pos[0], m->lights[i].pos[1],
+			   m->lights[i].pos[2], m->lights[i].rgb[0], m->lights[i].rgb[1], m->lights[i].rgb[2]);
+	for (int i = 0; i < 10; i++)
+		printf("spawn %d: (%d,%d,%d) rot %d, warp -> map %u spot %u\n", i, m->spawn[i][0], m->spawn[i][1],
+			   m->spawn[i][2], m->spawn[i][3], m->warp_map[i], m->warp_spawn[i]);
+	printf("%zu embedded image(s), %u object(s), %u instance(s), %u Digimon\n", m->num_images, m->num_objects,
+		   m->num_instances, m->num_digimon);
+}
+
+struct map_ctx { struct out_ctx o; int palette; };
+
+static int cb_map(const psxrom_entry *e, void *u)
+{
+	struct map_ctx *c = u;
+	if (e->is_dir || !has_map_ext(e->path)) return 0;
+	psxrom_map m;
+	psxrom_tfs t;
+	psxrom_result r = map_load(c->o.d, e->path, &m, &t);
+	if (r == PSXROM_OK) {
+		char prefix[2048];
+		snprintf(prefix, sizeof prefix, "%s%s", c->o.dir, e->path);
+		prefix[strlen(prefix) - 4] = 0;
+		r = map_render_all(&m, &t, prefix, c->palette);
+		psxrom_map_free(&m);
+		psxrom_tfs_free(&t);
+	}
+	if (r != PSXROM_OK) { fprintf(stderr, "%s: %s\n", e->path, psxrom_strerror(r)); c->o.errors++; }
+	return 0;
+}
+
 static int media_command(psxrom_disc *d, int argc, char **argv, psxrom_result *r)
 {
 	const char *cmd = argv[2];
@@ -1181,6 +1281,20 @@ static int media_command(psxrom_disc *d, int argc, char **argv, psxrom_result *r
 			}
 			dw1_close(&c);
 		}
+	} else if (!strcmp(cmd, "map") && argc >= 4) {
+		psxrom_map m;
+		psxrom_tfs t;
+		if ((*r = map_load(d, argv[3], &m, &t)) == PSXROM_OK) {
+			describe_map(&m, &t);
+			if (argc >= 5) *r = map_render_all(&m, &t, argv[4], -1);
+			psxrom_map_free(&m);
+			psxrom_tfs_free(&t);
+		}
+	} else if (!strcmp(cmd, "map-all") && argc >= 4) {
+		struct map_ctx c = {{d, argv[3], 0, NULL}, argc >= 5 ? atoi(argv[4]) : 0};
+		MKDIR(argv[3]);
+		*r = psxrom_walk(d, cb_map, &c);
+		if (c.o.errors) *r = PSXROM_ERR_FORMAT;
 	} else if (!strcmp(cmd, "xa") && argc >= 7) {
 		uint32_t lba, count;
 		psxrom_xa_pcm pcm;

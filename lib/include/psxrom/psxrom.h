@@ -225,6 +225,47 @@ psxrom_result psxrom_mmd_load(const uint8_t *data, size_t size,
                               const psxrom_dw1_node *nodes, size_t bone_count, psxrom_mmd_model *out);
 void psxrom_mmd_free(psxrom_mmd_model *m);
 
+/* ---- Digimon World maps (.MAP + .TFS) ----
+ * A map is a pre-rendered background: a grid of 128x128 8bpp tiles (in the .TFS, with several
+ * palettes, e.g. times of day) described by the .MAP, which also holds camera, lights, spawn points,
+ * warps and sprite objects. Only the parts needed to render and describe the map are decoded. */
+
+typedef struct {
+    int32_t camera_origin[3];
+    int32_t camera_target[3];
+    struct { int32_t pos[3]; uint32_t rgb[3]; } lights[3];
+    uint32_t view_distance;
+    uint32_t tiles_w, tiles_h;
+    uint32_t *tiles;            /* tiles_w * tiles_h entries; 0xFFFFFFFF = empty cell */
+    int16_t spawn[10][4];       /* x, y, z, rotation */
+    uint16_t warp_map[10];      /* destination map index */
+    uint16_t warp_spawn[10];    /* destination spawn point */
+    uint16_t num_digimon;       /* roaming Digimon records (not decoded) */
+    uint16_t num_objects;       /* sprite objects (not decoded) */
+    uint16_t num_instances;
+    size_t num_images;          /* embedded TIM sections */
+    uint8_t collision[100][100];
+} psxrom_map;
+
+psxrom_result psxrom_map_parse(const uint8_t *data, size_t size, psxrom_map *out);
+void psxrom_map_free(psxrom_map *m);
+
+typedef struct {
+    uint16_t width, height;     /* tile grid size recorded in the file */
+    uint32_t num_palettes;
+    uint16_t *palettes;         /* num_palettes * 256 PSX 15-bit colours */
+    size_t num_tiles;
+    uint8_t *pixels;            /* num_tiles * 128 * 128 palette indices */
+} psxrom_tfs;
+
+psxrom_result psxrom_tfs_parse(const uint8_t *data, size_t size, psxrom_tfs *out);
+void psxrom_tfs_free(psxrom_tfs *t);
+
+/* Renders the whole background with one palette to tiles_w*128 x tiles_h*128 RGBA (empty cells are
+ * transparent). The caller frees *rgba. */
+psxrom_result psxrom_map_render(const psxrom_map *m, const psxrom_tfs *t, uint32_t palette,
+                                uint8_t **rgba, uint32_t *width, uint32_t *height);
+
 #ifdef __cplusplus
 }
 #endif
