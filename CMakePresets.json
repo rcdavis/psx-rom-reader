@@ -60,6 +60,38 @@
 			"cacheVariables": {
 				"CMAKE_BUILD_TYPE": "Release"
 			}
+		},
+		{
+			"name": "linux-debug-clang-chd",
+			"displayName": "Linux - Debug (Clang, CHD)",
+			"inherits": "linux-debug-clang",
+			"cacheVariables": {
+				"PSXROM_ENABLE_CHD": "ON"
+			}
+		},
+		{
+			"name": "linux-release-clang-chd",
+			"displayName": "Linux - Release (Clang, CHD)",
+			"inherits": "linux-release-clang",
+			"cacheVariables": {
+				"PSXROM_ENABLE_CHD": "ON"
+			}
+		},
+		{
+			"name": "linux-debug-gcc-chd",
+			"displayName": "Linux - Debug (GCC, CHD)",
+			"inherits": "linux-debug-gcc",
+			"cacheVariables": {
+				"PSXROM_ENABLE_CHD": "ON"
+			}
+		},
+		{
+			"name": "linux-release-gcc-chd",
+			"displayName": "Linux - Release (GCC, CHD)",
+			"inherits": "linux-release-gcc",
+			"cacheVariables": {
+				"PSXROM_ENABLE_CHD": "ON"
+			}
 		}
 	]
 }
