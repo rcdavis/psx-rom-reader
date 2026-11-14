@@ -1,9 +1,9 @@
 # psx-rom-reader
-Reads assets in a PSX rom. The repository is organized as a CMake superproject containing a dependency-free C99 library (`lib/`) and a command line viewer (`viewer/`).
+Reads assets in a PSX rom. The repository is organized as a CMake superproject containing a C99 library (`lib/`) and a command line viewer (`viewer/`). The default build has no external dependencies.
 
-Supports `.iso` (2048) and raw `.bin`/`.img` (2352 / 2336 byte sectors) images, ISO9660 browsing/extraction, TIM texture decoding, CD-XA ADPCM audio decoding, STR movie (MDEC v2/v3) frame decoding, and TMD 3D model parsing with glTF/GLB/OBJ export.
+Supports `.iso` (2048), raw `.bin`/`.img` (2352 / 2336 byte sectors), `.cue`/BIN and optionally `.chd` images, ISO9660 browsing/extraction, TIM texture decoding, CD-XA ADPCM audio decoding, STR movie (MDEC v2/v3) frame decoding, and TMD 3D model parsing with glTF/GLB/OBJ export.
 
-XA audio needs a raw image (`.bin`) because plain `.iso` files drop the Mode 2 subheaders. STR video also works on `.iso`.
+XA audio needs Mode 2 subheaders, available in raw BIN/CUE and supported CHD images; plain `.iso` files drop them. STR video also works on `.iso`.
 
 ## Build everything
 ```sh
@@ -12,6 +12,32 @@ cmake --build build
 ```
 
 The root project builds the library and viewer. To configure only the library from the repository root, pass `-DPSXROM_BUILD_VIEWER=OFF`.
+
+To enable CHD, configure with `-DPSXROM_ENABLE_CHD=ON`. CMake fetches a pinned
+[libchdr](https://github.com/rtissera/libchdr) and its bundled codecs; the
+default OFF setting needs no network or external libraries. When using
+FetchContent, set this option before `FetchContent_MakeAvailable(psxrom)`.
+For an offline CHD-enabled build, point CMake's `FETCHCONTENT_SOURCE_DIR_LIBCHDR`
+at a checkout of the pinned libchdr revision.
+
+The Linux configure presets also have CHD-enabled variants. For example:
+
+```sh
+cmake --preset linux-debug-clang-chd
+cmake --build build/linux-debug-clang-chd
+build/linux-debug-clang-chd/viewer/psxview game.chd info
+```
+
+Replace `debug` with `release` or `clang` with `gcc` as needed. The original
+presets keep CHD disabled by default.
+
+Pass the `.cue` or `.chd` path to any viewer command or `psxrom_disc_open`.
+Both expose the first data track only; subsequent audio tracks are not exposed.
+CUE files must reference a BINARY file and a supported first data track.
+CHD support currently requires a CD image with a raw MODE1 or MODE2 first
+track; parent/differencing CHDs and other track formats are unsupported.
+CHD is decoded in memory a hunk at a time, without extracting an image to disk.
+Disabled or unsupported CHD images return `PSXROM_ERR_UNSUPPORTED`.
 
 ## Use the library via CMake FetchContent
 ```cmake
