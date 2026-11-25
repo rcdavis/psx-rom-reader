@@ -15,6 +15,7 @@ find_package(OpenGL REQUIRED)
 
 add_executable(psxview-gui
     src/main.cpp
+    src/resource_entries.cpp
 )
 
 target_link_libraries(psxview-gui PRIVATE

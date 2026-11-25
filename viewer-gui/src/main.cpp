@@ -6,6 +6,7 @@
 #include <imgui_impl_sdl3.h>
 
 #include "psxrom/psxrom.h"
+#include "resource_entries.h"
 
 #include <cstdio>
 #include <memory>
@@ -22,8 +23,12 @@ bool set_gl_attribute(SDL_GLAttr attribute, int value)
     return false;
 }
 
-bool run_viewer(SDL_Window* window, const char* image_path, const psxrom_disc* disc)
+bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
 {
+    std::vector<std::string> entries;
+    const psxrom_result entries_result = disc != nullptr
+        ? load_resource_entries(disc, entries) : PSXROM_OK;
+    size_t selected_entry = entries.size();
     bool running = true;
     while (running)
     {
@@ -53,8 +58,28 @@ bool run_viewer(SDL_Window* window, const char* image_path, const psxrom_disc* d
         {
             ImGui::Text("Image: %s", image_path);
             ImGui::Text("Sectors: %lu", static_cast<unsigned long>(psxrom_disc_sector_count(disc)));
+            if (entries_result != PSXROM_OK)
+                ImGui::Text("Failed to read disc entries: %s", psxrom_strerror(entries_result));
+            else if (entries.empty())
+                ImGui::TextUnformatted("The disc has no directory entries.");
+            else if (ImGui::BeginListBox("Resources", ImVec2(-1, 0)))
+            {
+                for (size_t i = 0; i < entries.size(); ++i)
+                {
+                    ImGui::PushID(&entries[i]);
+                    const ImVec2 text_position = ImGui::GetCursorScreenPos();
+                    if (ImGui::Selectable("##entry", selected_entry == i))
+                        selected_entry = i;
+                    if (ImGui::IsItemVisible())
+                        ImGui::GetWindowDrawList()->AddText(
+                            text_position, ImGui::GetColorU32(ImGuiCol_Text), entries[i].c_str());
+                    ImGui::PopID();
+                }
+                ImGui::EndListBox();
+            }
         }
-        ImGui::TextUnformatted("Disc browsing UI is not implemented yet.");
+        else
+            ImGui::TextUnformatted("Open an image using the command line to list its resources.");
         ImGui::End();
 
         ImGui::Render();

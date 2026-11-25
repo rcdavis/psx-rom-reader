@@ -21,7 +21,7 @@ build/viewer-gui/psxview-gui
 build/viewer-gui/psxview-gui game.bin
 ```
 
-The image path is optional; when supplied, the viewer opens the disc and displays its sector count. The GUI project uses the sibling `imgui/` and `lib/` projects. Its first configure fetches SDL3 with CMake FetchContent. To configure only the standalone GUI project, use `cmake -S viewer-gui -B build-viewer-gui`.
+The image path is optional; when supplied, the viewer opens the disc and lists its files and directories recursively. Directories have a trailing slash. The GUI project uses the sibling `imgui/` and `lib/` projects. Its first configure fetches SDL3 with CMake FetchContent. To configure only the standalone GUI project, use `cmake -S viewer-gui -B build-viewer-gui`.
 
 To enable CHD, configure with `-DPSXROM_ENABLE_CHD=ON`. CMake fetches a pinned
 [libchdr](https://github.com/rtissera/libchdr) and its bundled codecs; the
