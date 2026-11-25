@@ -24,7 +24,7 @@ int collect_entry(const psxrom_entry* entry, void* user)
     }
     levels.resize(depth + 1);
     auto& siblings = *levels.back();
-    siblings.push_back({entry->name, entry->is_dir != 0, {}});
+    siblings.push_back({entry->name, entry->path, entry->size, entry->lba, entry->is_dir != 0, {}});
     if (entry->is_dir)
         levels.push_back(&siblings.back().children);
     return 0;

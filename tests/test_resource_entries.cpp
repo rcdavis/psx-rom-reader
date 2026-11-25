@@ -74,21 +74,25 @@ int main(int argc, char* argv[])
         psxrom_disc* opened = nullptr;
         CHECK(psxrom_disc_open(argv[1], &opened) == PSXROM_OK);
         const std::unique_ptr<psxrom_disc, decltype(&psxrom_disc_close)> disc(opened, psxrom_disc_close);
-        std::vector<ResourceEntry> entries = {{"stale", false, {}}};
+        std::vector<ResourceEntry> entries = {{"stale", "/stale", 0, 0, false, {}}};
         const psxrom_result result = load_resource_entries(disc.get(), entries);
         if (scenario == 0)
         {
             CHECK(result == PSXROM_OK);
             CHECK(entries.size() == 4);
             CHECK(entries[0].name == "ROOT.TXT" && !entries[0].is_directory && entries[0].children.empty());
+            CHECK(entries[0].path == "/ROOT.TXT" && entries[0].size == 1 && entries[0].lba == 22);
             CHECK(entries[1].name == "SUBDIR" && entries[1].is_directory && entries[1].children.size() == 2);
             CHECK(entries[1].children[0].name == "NESTED.TIM" && !entries[1].children[0].is_directory);
             CHECK(entries[1].children[1].name == "INNER" && entries[1].children[1].is_directory);
             CHECK(entries[1].children[1].children.size() == 1);
             CHECK(entries[1].children[1].children[0].name == "NESTED.TIM");
+            CHECK(entries[1].children[1].children[0].path == "/SUBDIR/INNER/NESTED.TIM");
+            CHECK(entries[1].children[1].children[0].size == 1 && entries[1].children[1].children[0].lba == 25);
             CHECK(entries[2].name == "EMPTY" && entries[2].is_directory && entries[2].children.empty());
             CHECK(entries[3].name == "OTHER" && entries[3].is_directory && entries[3].children.size() == 1);
             CHECK(entries[3].children[0].name == "NESTED.TIM");
+            CHECK(entries[3].children[0].path == "/OTHER/NESTED.TIM");
         }
         else
         {

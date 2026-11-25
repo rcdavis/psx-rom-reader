@@ -89,6 +89,15 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
                 if (ImGui::BeginChild("resources", ImVec2(0, 300), ImGuiChildFlags_Borders))
                     draw_resource_tree(entries, selected_entry);
                 ImGui::EndChild();
+                ImGui::SeparatorText("File details");
+                if (selected_entry != nullptr && !selected_entry->is_directory)
+                {
+                    ImGui::TextWrapped("Path: %s", selected_entry->path.c_str());
+                    ImGui::Text("Size: %lu bytes", static_cast<unsigned long>(selected_entry->size));
+                    ImGui::Text("Starting sector (LBA): %lu", static_cast<unsigned long>(selected_entry->lba));
+                }
+                else
+                    ImGui::TextUnformatted("Select a file to view its details.");
             }
         }
         else
