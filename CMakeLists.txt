@@ -1,19 +1,32 @@
 cmake_minimum_required(VERSION 3.14)
 project(psx_rom_reader VERSION 0.1.0 LANGUAGES C)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-set(_psxrom_viewer_default OFF)
+set(_psxrom_cli_default OFF)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(_psxrom_viewer_default ON)
+    set(_psxrom_cli_default ON)
 endif()
-option(PSXROM_BUILD_VIEWER "Build the psxview command line viewer" ${_psxrom_viewer_default})
+option(PSXROM_BUILD_CLI "Build the psxview-cli command line viewer" ${_psxrom_cli_default})
 
+set(_psxrom_gui_default OFF)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(_psxrom_gui_default ON)
+endif()
+option(PSXROM_BUILD_GUI "Build the psxview-gui visual viewer" ${_psxrom_gui_default})
+
+add_subdirectory(imgui)
 add_subdirectory(lib)
 
-if(PSXROM_BUILD_VIEWER)
-    add_subdirectory(viewer)
+if(PSXROM_BUILD_CLI)
+    add_subdirectory(viewer-cli)
+endif()
+
+if(PSXROM_BUILD_GUI)
+    add_subdirectory(viewer-gui)
 endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
