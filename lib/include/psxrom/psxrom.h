@@ -14,15 +14,18 @@ typedef enum {
 	PSXROM_ERR_FORMAT,
 	PSXROM_ERR_NOT_FOUND,
 	PSXROM_ERR_NOMEM,
-	PSXROM_ERR_RANGE
+	PSXROM_ERR_RANGE,
+	PSXROM_ERR_UNSUPPORTED
 } psxrom_result;
 
 const char *psxrom_strerror(psxrom_result r);
 
-/* ---- Disc image (.iso 2048, .bin/.img 2352, 2336 sector layouts) ---- */
+/* ---- Disc image (.iso, .bin/.img, .cue and optionally .chd) ---- */
 
 typedef struct psxrom_disc psxrom_disc;
 
+/* CUE and CHD images expose the first data track only. CHD requires a build
+ * with PSXROM_ENABLE_CHD; unsupported image types return ERR_UNSUPPORTED. */
 psxrom_result psxrom_disc_open(const char *path, psxrom_disc **out);
 void psxrom_disc_close(psxrom_disc *d);
 /* Reads the 2048-byte user data of one logical sector. */
@@ -40,7 +43,7 @@ typedef struct {
     uint8_t data[2324];
 } psxrom_raw_sector;
 
-/* 1 when the image keeps the Mode 2 subheaders (raw .bin/.img), required for XA audio. */
+/* 1 when the image keeps Mode 2 subheaders, required for XA audio. */
 int psxrom_disc_has_raw(const psxrom_disc *d);
 /* On cooked 2048-byte images a data sector (submode 0x08) is synthesized. */
 psxrom_result psxrom_disc_read_raw(psxrom_disc *d, uint32_t lba, psxrom_raw_sector *out);

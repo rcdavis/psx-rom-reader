@@ -4,12 +4,23 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef PSXROM_ENABLE_CHD
+#include <libchdr/chd.h>
+#endif
+
 struct psxrom_disc {
 	FILE *f;
+	uint64_t base_offset;
 	uint32_t sector_size;
 	uint32_t data_offset;
 	uint32_t sectors;
 	int has_subheader;
+#ifdef PSXROM_ENABLE_CHD
+	chd_file *chd;
+	uint8_t *hunk;
+	uint32_t hunk_size;
+	uint32_t cached_hunk;
+#endif
 };
 
 #include <ctype.h>

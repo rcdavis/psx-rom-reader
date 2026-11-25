@@ -14,4 +14,8 @@ target_link_libraries(psxview PRIVATE
     psxrom::psxrom
 )
 
+if(UNIX)
+    target_link_libraries(psxview PRIVATE m)
+endif()
+
 target_compile_features(psxview PRIVATE c_std_99)
