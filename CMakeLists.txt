@@ -10,11 +10,21 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 option(PSXROM_BUILD_CLI "Build the psxview-cli command line viewer" ${_psxrom_cli_default})
 
+set(_psxrom_gui_default OFF)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(_psxrom_gui_default ON)
+endif()
+option(PSXROM_BUILD_GUI "Build the psxview-gui visual viewer" ${_psxrom_gui_default})
+
 add_subdirectory(imgui)
 add_subdirectory(lib)
 
 if(PSXROM_BUILD_CLI)
     add_subdirectory(viewer-cli)
+endif()
+
+if(PSXROM_BUILD_GUI)
+    add_subdirectory(viewer-gui)
 endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

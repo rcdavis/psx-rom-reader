@@ -41,5 +41,5 @@ target_include_directories(imgui PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-target_compile_features(imgui PUBLIC cxx_std_11)
+target_compile_features(imgui PUBLIC cxx_std_20)
 target_link_libraries(imgui PUBLIC SDL3::SDL3 PRIVATE ${CMAKE_DL_LIBS})

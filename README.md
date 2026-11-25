@@ -1,5 +1,5 @@
 # psx-rom-reader
-Reads assets in a PSX rom. The repository is organized as a CMake superproject containing a C99 library (`lib/`) and a command line viewer (`viewer-cli/`). The default build has no external dependencies.
+Reads assets in a PSX rom. The repository is organized as a CMake superproject containing a C99 library (`lib/`), a command line viewer (`viewer-cli/`), and a Dear ImGui library (`imgui/`). The GUI viewer (`viewer-gui/`) uses SDL3 and OpenGL.
 
 Supports `.iso` (2048), raw `.bin`/`.img` (2352 / 2336 byte sectors), `.cue`/BIN and optionally `.chd` images, ISO9660 browsing/extraction, TIM texture decoding, CD-XA ADPCM audio decoding, STR movie (MDEC v2/v3) frame decoding, and TMD 3D model parsing with glTF/GLB/OBJ export.
 
@@ -11,7 +11,16 @@ cmake -S . -B build
 cmake --build build
 ```
 
-The root project builds the library and CLI viewer. To configure only the library from the repository root, pass `-DPSXROM_BUILD_CLI=OFF`.
+The root project builds the library, ImGui, and both viewers by default. CMake fetches SDL3 when configuring ImGui. To configure without either viewer, pass `-DPSXROM_BUILD_CLI=OFF -DPSXROM_BUILD_GUI=OFF`; when fetched as a dependency, both viewers are disabled by default.
+
+## Build the GUI viewer
+```sh
+cmake -S . -B build -DPSXROM_BUILD_GUI=ON
+cmake --build build --target psxview-gui
+build/viewer-gui/psxview-gui
+```
+
+The GUI project uses the sibling `imgui/` and `lib/` projects. Its first configure fetches SDL3 with CMake FetchContent. To configure only the standalone GUI project, use `cmake -S viewer-gui -B build-viewer-gui`.
 
 To enable CHD, configure with `-DPSXROM_ENABLE_CHD=ON`. CMake fetches a pinned
 [libchdr](https://github.com/rtissera/libchdr) and its bundled codecs; the
