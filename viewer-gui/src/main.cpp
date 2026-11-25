@@ -8,6 +8,7 @@
 #include "psxrom/psxrom.h"
 
 #include <cstdio>
+#include <memory>
 
 namespace
 {
@@ -21,7 +22,7 @@ bool set_gl_attribute(SDL_GLAttr attribute, int value)
     return false;
 }
 
-bool run_viewer(SDL_Window* window)
+bool run_viewer(SDL_Window* window, const char* image_path, const psxrom_disc* disc)
 {
     bool running = true;
     while (running)
@@ -48,6 +49,11 @@ bool run_viewer(SDL_Window* window)
         ImGui::Begin("PSX ROM Reader");
         ImGui::TextUnformatted("SDL3 and Dear ImGui are ready.");
         ImGui::Text("Reader core: %s", psxrom_strerror(PSXROM_OK));
+        if (disc != nullptr)
+        {
+            ImGui::Text("Image: %s", image_path);
+            ImGui::Text("Sectors: %lu", static_cast<unsigned long>(psxrom_disc_sector_count(disc)));
+        }
         ImGui::TextUnformatted("Disc browsing UI is not implemented yet.");
         ImGui::End();
 
@@ -75,8 +81,26 @@ bool run_viewer(SDL_Window* window)
 
 } // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
+    if (argc > 2)
+    {
+        std::fprintf(stderr, "usage: %s [image]\n", argv[0]);
+        return 1;
+    }
+
+    psxrom_disc* opened_disc = nullptr;
+    if (argc == 2)
+    {
+        const psxrom_result result = psxrom_disc_open(argv[1], &opened_disc);
+        if (result != PSXROM_OK)
+        {
+            std::fprintf(stderr, "Failed to open image '%s': %s\n", argv[1], psxrom_strerror(result));
+            return 1;
+        }
+    }
+    const std::unique_ptr<psxrom_disc, decltype(&psxrom_disc_close)> disc(opened_disc, psxrom_disc_close);
+
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -147,7 +171,7 @@ int main()
         return 1;
     }
 
-    const bool success = run_viewer(window);
+    const bool success = run_viewer(window, argc == 2 ? argv[1] : nullptr, disc.get());
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();

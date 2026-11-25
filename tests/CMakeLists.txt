@@ -4,6 +4,14 @@ target_link_libraries(test_disc PRIVATE psxrom::psxrom)
 add_test(NAME disc_cue COMMAND test_disc ${CMAKE_CURRENT_BINARY_DIR})
 set_tests_properties(disc_cue PROPERTIES FIXTURES_SETUP disc_images)
 
+if(TARGET psxview-gui)
+    add_test(NAME gui_arguments
+        COMMAND ${CMAKE_COMMAND}
+            -DGUI_EXECUTABLE=$<TARGET_FILE:psxview-gui>
+            -DMISSING_IMAGE=${CMAKE_CURRENT_BINARY_DIR}/missing-gui-image.iso
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/test_gui_arguments.cmake)
+endif()
+
 if(PSXROM_ENABLE_CHD)
     find_program(PSXROM_CHDMAN chdman)
     if(PSXROM_CHDMAN)
