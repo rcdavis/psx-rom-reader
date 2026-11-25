@@ -10,6 +10,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 option(PSXROM_BUILD_CLI "Build the psxview-cli command line viewer" ${_psxrom_cli_default})
 
+add_subdirectory(imgui)
 add_subdirectory(lib)
 
 if(PSXROM_BUILD_CLI)
