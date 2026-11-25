@@ -15,6 +15,11 @@ find_package(OpenGL REQUIRED)
 
 add_executable(psxview-gui
     src/main.cpp
+    src/resource_entries.cpp
+)
+
+target_include_directories(psxview-gui PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 target_link_libraries(psxview-gui PRIVATE

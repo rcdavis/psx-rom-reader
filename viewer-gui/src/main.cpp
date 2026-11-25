@@ -6,8 +6,10 @@
 #include <imgui_impl_sdl3.h>
 
 #include "psxrom/psxrom.h"
+#include "resource_entries.h"
 
 #include <cstdio>
+#include <memory>
 
 namespace
 {
@@ -21,8 +23,35 @@ bool set_gl_attribute(SDL_GLAttr attribute, int value)
     return false;
 }
 
-bool run_viewer(SDL_Window* window)
+void draw_resource_tree(const std::vector<ResourceEntry>& entries, const ResourceEntry*& selected)
 {
+    for (const ResourceEntry& entry : entries)
+    {
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
+        if (&entry == selected)
+            flags |= ImGuiTreeNodeFlags_Selected;
+        if (!entry.is_directory || entry.children.empty())
+            flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+        const bool open = ImGui::TreeNodeEx(&entry, flags, "%s", entry.name.c_str());
+        if ((ImGui::IsItemClicked() || ImGui::IsItemActivated()) && !ImGui::IsItemToggledOpen())
+            selected = &entry;
+        if (open && entry.is_directory && !entry.children.empty())
+        {
+            draw_resource_tree(entry.children, selected);
+            ImGui::TreePop();
+        }
+    }
+}
+
+bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
+{
+    std::vector<ResourceEntry> entries;
+    const psxrom_result entries_result = disc != nullptr
+        ? load_resource_entries(disc, entries) : PSXROM_OK;
+    const ResourceEntry* selected_entry = nullptr;
+    const ResourceEntry* inspected_entry = nullptr;
+    ResourceDetails details;
     bool running = true;
     while (running)
     {
@@ -48,7 +77,59 @@ bool run_viewer(SDL_Window* window)
         ImGui::Begin("PSX ROM Reader");
         ImGui::TextUnformatted("SDL3 and Dear ImGui are ready.");
         ImGui::Text("Reader core: %s", psxrom_strerror(PSXROM_OK));
-        ImGui::TextUnformatted("Disc browsing UI is not implemented yet.");
+        if (disc != nullptr)
+        {
+            ImGui::Text("Image: %s", image_path);
+            ImGui::Text("Sectors: %lu", static_cast<unsigned long>(psxrom_disc_sector_count(disc)));
+            if (entries_result != PSXROM_OK)
+                ImGui::Text("Failed to read disc entries: %s", psxrom_strerror(entries_result));
+            else if (entries.empty())
+                ImGui::TextUnformatted("The disc has no directory entries.");
+            else
+            {
+                ImGui::TextUnformatted("Resources");
+                if (ImGui::BeginChild("resources", ImVec2(0, 300), ImGuiChildFlags_Borders))
+                    draw_resource_tree(entries, selected_entry);
+                ImGui::EndChild();
+                if (selected_entry != inspected_entry)
+                {
+                    details = selected_entry != nullptr && !selected_entry->is_directory
+                        ? load_resource_details(disc, *selected_entry) : ResourceDetails{};
+                    inspected_entry = selected_entry;
+                }
+                ImGui::SeparatorText("File details");
+                if (selected_entry != nullptr && !selected_entry->is_directory)
+                {
+                    ImGui::TextWrapped("Path: %s", selected_entry->path.c_str());
+                    ImGui::Text("Size: %lu bytes", static_cast<unsigned long>(selected_entry->size));
+                    ImGui::Text("Starting sector (LBA): %lu", static_cast<unsigned long>(selected_entry->lba));
+                    if (details.type == ResourceDetailType::Tim)
+                    {
+                        ImGui::SeparatorText("TIM texture");
+                        ImGui::Text("Dimensions: %lu x %lu pixels", static_cast<unsigned long>(details.width),
+                                    static_cast<unsigned long>(details.height));
+                        ImGui::Text("Color depth: %lu bits per pixel", static_cast<unsigned long>(details.bpp));
+                        ImGui::Text("Image VRAM position: (%lu, %lu)", static_cast<unsigned long>(details.img_x),
+                                    static_cast<unsigned long>(details.img_y));
+                        if (details.has_clut)
+                        {
+                            ImGui::Text("Palettes: %lu (%lu colors each)", static_cast<unsigned long>(details.num_cluts),
+                                        static_cast<unsigned long>(details.clut_w));
+                            ImGui::Text("Palette VRAM position: (%lu, %lu)", static_cast<unsigned long>(details.clut_x),
+                                        static_cast<unsigned long>(details.clut_y));
+                        }
+                        else
+                            ImGui::TextUnformatted("Palettes: none");
+                    }
+                    else if (details.type == ResourceDetailType::Error)
+                        ImGui::Text("Failed to load TIM details: %s", psxrom_strerror(details.error));
+                }
+                else
+                    ImGui::TextUnformatted("Select a file to view its details.");
+            }
+        }
+        else
+            ImGui::TextUnformatted("Open an image using the command line to list its resources.");
         ImGui::End();
 
         ImGui::Render();
@@ -75,8 +156,26 @@ bool run_viewer(SDL_Window* window)
 
 } // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
+    if (argc > 2)
+    {
+        std::fprintf(stderr, "usage: %s [image]\n", argv[0]);
+        return 1;
+    }
+
+    psxrom_disc* opened_disc = nullptr;
+    if (argc == 2)
+    {
+        const psxrom_result result = psxrom_disc_open(argv[1], &opened_disc);
+        if (result != PSXROM_OK)
+        {
+            std::fprintf(stderr, "Failed to open image '%s': %s\n", argv[1], psxrom_strerror(result));
+            return 1;
+        }
+    }
+    const std::unique_ptr<psxrom_disc, decltype(&psxrom_disc_close)> disc(opened_disc, psxrom_disc_close);
+
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -147,7 +246,7 @@ int main()
         return 1;
     }
 
-    const bool success = run_viewer(window);
+    const bool success = run_viewer(window, argc == 2 ? argv[1] : nullptr, disc.get());
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
