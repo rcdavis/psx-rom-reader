@@ -15,7 +15,7 @@ if(TARGET psxview-gui)
     add_executable(test_resource_entries
         test_resource_entries.cpp
         ../viewer-gui/src/resource_entries.cpp)
-    target_include_directories(test_resource_entries PRIVATE ../viewer-gui/src)
+    target_include_directories(test_resource_entries PRIVATE ../viewer-gui/include)
     target_link_libraries(test_resource_entries PRIVATE psxrom::psxrom)
     target_compile_features(test_resource_entries PRIVATE cxx_std_20)
     add_test(NAME gui_resource_entries

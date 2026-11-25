@@ -18,6 +18,10 @@ add_executable(psxview-gui
     src/resource_entries.cpp
 )
 
+target_include_directories(psxview-gui PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 target_link_libraries(psxview-gui PRIVATE
     imgui::imgui
     psxrom::psxrom
