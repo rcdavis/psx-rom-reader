@@ -50,6 +50,8 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
     const psxrom_result entries_result = disc != nullptr
         ? load_resource_entries(disc, entries) : PSXROM_OK;
     const ResourceEntry* selected_entry = nullptr;
+    const ResourceEntry* inspected_entry = nullptr;
+    ResourceDetails details;
     bool running = true;
     while (running)
     {
@@ -89,12 +91,38 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
                 if (ImGui::BeginChild("resources", ImVec2(0, 300), ImGuiChildFlags_Borders))
                     draw_resource_tree(entries, selected_entry);
                 ImGui::EndChild();
+                if (selected_entry != inspected_entry)
+                {
+                    details = selected_entry != nullptr && !selected_entry->is_directory
+                        ? load_resource_details(disc, *selected_entry) : ResourceDetails{};
+                    inspected_entry = selected_entry;
+                }
                 ImGui::SeparatorText("File details");
                 if (selected_entry != nullptr && !selected_entry->is_directory)
                 {
                     ImGui::TextWrapped("Path: %s", selected_entry->path.c_str());
                     ImGui::Text("Size: %lu bytes", static_cast<unsigned long>(selected_entry->size));
                     ImGui::Text("Starting sector (LBA): %lu", static_cast<unsigned long>(selected_entry->lba));
+                    if (details.type == ResourceDetailType::Tim)
+                    {
+                        ImGui::SeparatorText("TIM texture");
+                        ImGui::Text("Dimensions: %lu x %lu pixels", static_cast<unsigned long>(details.width),
+                                    static_cast<unsigned long>(details.height));
+                        ImGui::Text("Color depth: %lu bits per pixel", static_cast<unsigned long>(details.bpp));
+                        ImGui::Text("Image VRAM position: (%lu, %lu)", static_cast<unsigned long>(details.img_x),
+                                    static_cast<unsigned long>(details.img_y));
+                        if (details.has_clut)
+                        {
+                            ImGui::Text("Palettes: %lu (%lu colors each)", static_cast<unsigned long>(details.num_cluts),
+                                        static_cast<unsigned long>(details.clut_w));
+                            ImGui::Text("Palette VRAM position: (%lu, %lu)", static_cast<unsigned long>(details.clut_x),
+                                        static_cast<unsigned long>(details.clut_y));
+                        }
+                        else
+                            ImGui::TextUnformatted("Palettes: none");
+                    }
+                    else if (details.type == ResourceDetailType::Error)
+                        ImGui::Text("Failed to load TIM details: %s", psxrom_strerror(details.error));
                 }
                 else
                     ImGui::TextUnformatted("Select a file to view its details.");

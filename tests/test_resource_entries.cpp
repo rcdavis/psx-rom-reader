@@ -55,6 +55,27 @@ bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
         add_record(image, offset, "INNER", 24, true);
         add_record(image, 24 * sector_size, "NESTED.TIM;1", 25, false);
         add_record(image, 27 * sector_size, "NESTED.TIM;1", 25, false);
+
+        const size_t tim = 23 * sector_size;
+        write_u32(image, tim, 0x10);
+        write_u32(image, tim + 4, 8);
+        write_u32(image, tim + 8, 76);
+        image[tim + 12] = 3;
+        image[tim + 14] = 4;
+        image[tim + 16] = 16;
+        image[tim + 18] = 2;
+        write_u32(image, tim + 84, 16);
+        image[tim + 88] = 5;
+        image[tim + 90] = 6;
+        image[tim + 92] = 2;
+        image[tim + 94] = 1;
+
+        const size_t direct_tim = 22 * sector_size;
+        write_u32(image, direct_tim, 0x10);
+        write_u32(image, direct_tim + 4, 2);
+        write_u32(image, direct_tim + 8, 14);
+        image[direct_tim + 16] = 1;
+        image[direct_tim + 18] = 1;
     }
 
     std::ofstream out(path, std::ios::binary);
@@ -93,6 +114,31 @@ int main(int argc, char* argv[])
             CHECK(entries[3].name == "OTHER" && entries[3].is_directory && entries[3].children.size() == 1);
             CHECK(entries[3].children[0].name == "NESTED.TIM");
             CHECK(entries[3].children[0].path == "/OTHER/NESTED.TIM");
+
+            const ResourceDetails tim = load_resource_details(
+                disc.get(), {"image.TiM", "/image.TiM", 100, 23, false, {}});
+            CHECK(tim.type == ResourceDetailType::Tim && tim.error == PSXROM_OK);
+            CHECK(tim.width == 8 && tim.height == 1 && tim.bpp == 4);
+            CHECK(tim.img_x == 5 && tim.img_y == 6);
+            CHECK(tim.has_clut && tim.clut_x == 3 && tim.clut_y == 4);
+            CHECK(tim.clut_w == 16 && tim.num_cluts == 2);
+
+            const ResourceDetails direct = load_resource_details(
+                disc.get(), {"image.tim", "/image.tim", 22, 22, false, {}});
+            CHECK(direct.type == ResourceDetailType::Tim && direct.bpp == 16);
+            CHECK(direct.width == 1 && direct.height == 1 && !direct.has_clut);
+            CHECK(load_resource_details(disc.get(), entries[0]).type == ResourceDetailType::None);
+            CHECK(load_resource_details(disc.get(), {"folder.tim", "/folder.tim", 0, 0, true, {}}).type ==
+                  ResourceDetailType::None);
+
+            const ResourceDetails invalid = load_resource_details(disc.get(), entries[1].children[1].children[0]);
+            CHECK(invalid.type == ResourceDetailType::Error && invalid.error == PSXROM_ERR_FORMAT);
+            const ResourceDetails unreadable = load_resource_details(
+                disc.get(), {"bad.tim", "/bad.tim", 100, 30, false, {}});
+            CHECK(unreadable.type == ResourceDetailType::Error && unreadable.error == PSXROM_ERR_RANGE);
+            const ResourceDetails oversized = load_resource_details(
+                disc.get(), {"big.tim", "/big.tim", UINT32_MAX, 23, false, {}});
+            CHECK(oversized.type == ResourceDetailType::Error && oversized.error == PSXROM_ERR_RANGE);
         }
         else
         {
