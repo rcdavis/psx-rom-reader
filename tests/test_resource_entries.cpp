@@ -76,6 +76,23 @@ bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
         write_u32(image, direct_tim + 8, 14);
         image[direct_tim + 16] = 1;
         image[direct_tim + 18] = 1;
+
+        const size_t tmd = 25 * sector_size;
+        write_u32(image, tmd, 0x41);
+        write_u32(image, tmd + 8, 2);
+        for (size_t i = 0; i < 2; ++i)
+        {
+            const size_t object = tmd + 12 + i * 28;
+            write_u32(image, object, 56);
+            write_u32(image, object + 4, 3);
+            write_u32(image, object + 16, 80);
+            write_u32(image, object + 20, 1);
+        }
+        image[tmd + 93] = 3;
+        image[tmd + 94] = 1;
+        image[tmd + 95] = 0x20;
+        image[tmd + 102] = 1;
+        image[tmd + 104] = 2;
     }
 
     std::ofstream out(path, std::ios::binary);
@@ -139,6 +156,19 @@ int main(int argc, char* argv[])
             const ResourceDetails oversized = load_resource_details(
                 disc.get(), {"big.tim", "/big.tim", UINT32_MAX, 23, false, {}});
             CHECK(oversized.type == ResourceDetailType::Error && oversized.error == PSXROM_ERR_RANGE);
+
+            const ResourceDetails tmd = load_resource_details(
+                disc.get(), {"model.TmD", "/model.TmD", 108, 25, false, {}});
+            CHECK(tmd.type == ResourceDetailType::Tmd && tmd.error == PSXROM_OK);
+            CHECK(tmd.object_count == 2 && tmd.triangle_count == 2);
+            CHECK(load_resource_details(disc.get(), {"folder.tmd", "/folder.tmd", 0, 0, true, {}}).type ==
+                  ResourceDetailType::None);
+            const ResourceDetails invalid_tmd = load_resource_details(
+                disc.get(), {"bad.tmd", "/bad.tmd", 100, 23, false, {}});
+            CHECK(invalid_tmd.type == ResourceDetailType::Error && invalid_tmd.error == PSXROM_ERR_FORMAT);
+            const ResourceDetails unreadable_tmd = load_resource_details(
+                disc.get(), {"bad.tmd", "/bad.tmd", 100, 30, false, {}});
+            CHECK(unreadable_tmd.type == ResourceDetailType::Error && unreadable_tmd.error == PSXROM_ERR_RANGE);
         }
         else
         {

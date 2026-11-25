@@ -121,8 +121,14 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
                         else
                             ImGui::TextUnformatted("Palettes: none");
                     }
+                    else if (details.type == ResourceDetailType::Tmd)
+                    {
+                        ImGui::SeparatorText("TMD model");
+                        ImGui::Text("Objects: %zu", details.object_count);
+                        ImGui::Text("Triangles: %zu", details.triangle_count);
+                    }
                     else if (details.type == ResourceDetailType::Error)
-                        ImGui::Text("Failed to load TIM details: %s", psxrom_strerror(details.error));
+                        ImGui::Text("Failed to load resource details: %s", psxrom_strerror(details.error));
                 }
                 else
                     ImGui::TextUnformatted("Select a file to view its details.");

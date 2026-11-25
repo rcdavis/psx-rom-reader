@@ -21,6 +21,7 @@ enum class ResourceDetailType
 {
     None,
     Tim,
+    Tmd,
     Error
 };
 
@@ -38,6 +39,8 @@ struct ResourceDetails
     uint32_t clut_y = 0;
     uint32_t clut_w = 0;
     uint32_t num_cluts = 0;
+    size_t object_count = 0;
+    size_t triangle_count = 0;
 };
 
 ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& entry);

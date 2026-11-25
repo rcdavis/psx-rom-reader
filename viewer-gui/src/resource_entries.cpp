@@ -34,6 +34,17 @@ int collect_entry(const psxrom_entry* entry, void* user)
     return 0;
 }
 
+bool has_extension(const std::string& name, const char* extension)
+{
+    const size_t dot = name.find_last_of('.');
+    if (dot == std::string::npos || name.size() - dot != std::strlen(extension))
+        return false;
+    for (size_t i = 0; extension[i] != '\0'; ++i)
+        if (std::tolower(static_cast<unsigned char>(name[dot + i])) != extension[i])
+            return false;
+    return true;
+}
+
 }
 
 psxrom_result load_resource_entries(psxrom_disc* disc, std::vector<ResourceEntry>& entries)
@@ -51,11 +62,11 @@ psxrom_result load_resource_entries(psxrom_disc* disc, std::vector<ResourceEntry
 ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& entry)
 {
     ResourceDetails details;
-    const size_t dot = entry.name.find_last_of('.');
-    if (entry.is_directory || dot == std::string::npos || entry.name.size() - dot != 4 ||
-        std::tolower(static_cast<unsigned char>(entry.name[dot + 1])) != 't' ||
-        std::tolower(static_cast<unsigned char>(entry.name[dot + 2])) != 'i' ||
-        std::tolower(static_cast<unsigned char>(entry.name[dot + 3])) != 'm')
+    if (entry.is_directory)
+        return details;
+    const bool is_tim = has_extension(entry.name, ".tim");
+    const bool is_tmd = has_extension(entry.name, ".tmd");
+    if (!is_tim && !is_tmd)
         return details;
 
     details.type = ResourceDetailType::Error;
@@ -75,6 +86,21 @@ ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& en
         return details;
 
     const std::unique_ptr<uint8_t, decltype(&std::free)> buffer(data, &std::free);
+    if (is_tmd)
+    {
+        psxrom_tmd tmd{};
+        details.error = psxrom_tmd_parse(buffer.get(), size, &tmd);
+        if (details.error != PSXROM_OK)
+            return details;
+
+        details.type = ResourceDetailType::Tmd;
+        details.object_count = tmd.num_objects;
+        for (size_t i = 0; i < tmd.num_objects; ++i)
+            details.triangle_count += tmd.objects[i].num_tris;
+        psxrom_tmd_free(&tmd);
+        return details;
+    }
+
     psxrom_tim tim{};
     details.error = psxrom_tim_parse(buffer.get(), size, &tim);
     if (details.error != PSXROM_OK)
