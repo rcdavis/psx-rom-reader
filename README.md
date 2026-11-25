@@ -1,5 +1,5 @@
 # psx-rom-reader
-Reads assets in a PSX rom. The repository is organized as a CMake superproject containing a C99 library (`lib/`) and a command line viewer (`viewer/`). The default build has no external dependencies.
+Reads assets in a PSX rom. The repository is organized as a CMake superproject containing a C99 library (`lib/`) and a command line viewer (`viewer-cli/`). The default build has no external dependencies.
 
 Supports `.iso` (2048), raw `.bin`/`.img` (2352 / 2336 byte sectors), `.cue`/BIN and optionally `.chd` images, ISO9660 browsing/extraction, TIM texture decoding, CD-XA ADPCM audio decoding, STR movie (MDEC v2/v3) frame decoding, and TMD 3D model parsing with glTF/GLB/OBJ export.
 
@@ -11,7 +11,7 @@ cmake -S . -B build
 cmake --build build
 ```
 
-The root project builds the library and viewer. To configure only the library from the repository root, pass `-DPSXROM_BUILD_VIEWER=OFF`.
+The root project builds the library and CLI viewer. To configure only the library from the repository root, pass `-DPSXROM_BUILD_CLI=OFF`.
 
 To enable CHD, configure with `-DPSXROM_ENABLE_CHD=ON`. CMake fetches a pinned
 [libchdr](https://github.com/rtissera/libchdr) and its bundled codecs; the
@@ -25,7 +25,7 @@ The Linux configure presets also have CHD-enabled variants. For example:
 ```sh
 cmake --preset linux-debug-clang-chd
 cmake --build build/linux-debug-clang-chd
-build/linux-debug-clang-chd/viewer/psxview game.chd info
+build/linux-debug-clang-chd/viewer-cli/psxview-cli game.chd info
 ```
 
 Replace `debug` with `release` or `clang` with `gcc` as needed. The original
@@ -48,9 +48,9 @@ FetchContent_Declare(psxrom
 FetchContent_MakeAvailable(psxrom)
 target_link_libraries(my_app PRIVATE psxrom::psxrom)
 ```
-When fetched as a dependency, the viewer is disabled by default.
+When fetched as a dependency, the CLI is disabled by default.
 
-The library can also be configured directly with `cmake -S lib -B build-lib`. For development, the viewer's CMake project can be configured independently with `cmake -S viewer -B build-viewer`; it uses the sibling `lib/` project.
+The library can also be configured directly with `cmake -S lib -B build-lib`. For development, the CLI's CMake project can be configured independently with `cmake -S viewer-cli -B build-viewer-cli`; it uses the sibling `lib/` project.
 
 ```c
 #include <psxrom/psxrom.h>
@@ -59,31 +59,31 @@ psxrom_entry e; psxrom_find(d, "/SYSTEM.CNF", &e);
 uint8_t *data; size_t n; psxrom_read_file(d, &e, &data, &n);
 ```
 
-## Viewer commands
+## CLI commands
 ```
-build/psxview game.bin info
-build/psxview game.bin ls
-build/psxview game.bin tims
-build/psxview game.bin hex /SYSTEM.CNF
-build/psxview game.bin extract /DIR/FILE.TIM out.tim
-build/psxview game.bin extract-all out/
-build/psxview game.bin tim /DIR/ICON.TIM icon.bmp [palette]
-build/psxview game.bin tim-all textures/
-build/psxview game.bin xa-list /MOVIE/OP1.STR          # XA audio streams (file/channel)
-build/psxview game.bin xa /MOVIE/OP1.STR 1 1 out.wav    # decode one stream to WAV
-build/psxview game.bin xa-all /MOVIE/OP1.STR audio/
-build/psxview game.bin str-info /MOVIE/OP1.STR
-build/psxview game.bin str-frame /MOVIE/OP1.STR 100 frame.bmp
-build/psxview game.bin str-frames /MOVIE/OP1.STR frames/ [first] [count]
-build/psxview game.bin str-y4m /MOVIE/OP1.STR op1.y4m       # uncompressed YUV4MPEG2 video, no ffmpeg needed
-build/psxview game.bin str-convert /MOVIE/OP1.STR op1.webm  # video + XA audio; format chosen by extension
-build/psxview game.bin tmd /DOOR/DOOR00.TMD door.glb      # summary + export; format by extension: .glb .gltf .obj
-build/psxview game.bin tmd-all models/ [glb|gltf|obj]      # every .TMD on the disc (default glb)
-build/psxview game.bin mmd-list                              # Digimon World models (US SLUS_010.32 only)
-build/psxview game.bin mmd AGUM agumon.glb                   # posed + textured model, by name or index
-build/psxview game.bin mmd-all models/ [glb|gltf|obj]        # every Digimon model
-build/psxview game.bin map /MAP/MAP1/MAYO01.MAP [prefix]      # describe a map; PNG per palette
-build/psxview game.bin map-all maps/ [palette]                # every map background (default palette 0)
+build/viewer-cli/psxview-cli game.bin info
+build/viewer-cli/psxview-cli game.bin ls
+build/viewer-cli/psxview-cli game.bin tims
+build/viewer-cli/psxview-cli game.bin hex /SYSTEM.CNF
+build/viewer-cli/psxview-cli game.bin extract /DIR/FILE.TIM out.tim
+build/viewer-cli/psxview-cli game.bin extract-all out/
+build/viewer-cli/psxview-cli game.bin tim /DIR/ICON.TIM icon.bmp [palette]
+build/viewer-cli/psxview-cli game.bin tim-all textures/
+build/viewer-cli/psxview-cli game.bin xa-list /MOVIE/OP1.STR          # XA audio streams (file/channel)
+build/viewer-cli/psxview-cli game.bin xa /MOVIE/OP1.STR 1 1 out.wav    # decode one stream to WAV
+build/viewer-cli/psxview-cli game.bin xa-all /MOVIE/OP1.STR audio/
+build/viewer-cli/psxview-cli game.bin str-info /MOVIE/OP1.STR
+build/viewer-cli/psxview-cli game.bin str-frame /MOVIE/OP1.STR 100 frame.bmp
+build/viewer-cli/psxview-cli game.bin str-frames /MOVIE/OP1.STR frames/ [first] [count]
+build/viewer-cli/psxview-cli game.bin str-y4m /MOVIE/OP1.STR op1.y4m       # uncompressed YUV4MPEG2 video, no ffmpeg needed
+build/viewer-cli/psxview-cli game.bin str-convert /MOVIE/OP1.STR op1.webm  # video + XA audio; format chosen by extension
+build/viewer-cli/psxview-cli game.bin tmd /DOOR/DOOR00.TMD door.glb      # summary + export; format by extension: .glb .gltf .obj
+build/viewer-cli/psxview-cli game.bin tmd-all models/ [glb|gltf|obj]      # every .TMD on the disc (default glb)
+build/viewer-cli/psxview-cli game.bin mmd-list                              # Digimon World models (US SLUS_010.32 only)
+build/viewer-cli/psxview-cli game.bin mmd AGUM agumon.glb                   # posed + textured model, by name or index
+build/viewer-cli/psxview-cli game.bin mmd-all models/ [glb|gltf|obj]        # every Digimon model
+build/viewer-cli/psxview-cli game.bin map /MAP/MAP1/MAYO01.MAP [prefix]      # describe a map; PNG per palette
+build/viewer-cli/psxview-cli game.bin map-all maps/ [palette]                # every map background (default palette 0)
 ```
 
 `str-convert` pipes frames into `ffmpeg` (must be in `PATH`) and muxes the first XA audio stream found in the movie, offset by its sector distance from the first video frame. Y4M files are large (about 300 MB for a two-minute movie); the frame rate is derived from sector spacing since STR files don't store it.

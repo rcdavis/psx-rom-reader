@@ -23,7 +23,7 @@
 
 static void usage(void)
 {
-	fputs("usage: psxview <image> <command> [args]\n"
+	fputs("usage: psxview-cli <image> <command> [args]\n"
 		  "  info                       volume label, boot executable, sector count\n"
 		  "  ls                         list all files\n"
 		  "  hex <path> [count]         hex dump (default 256 bytes)\n"
@@ -496,7 +496,7 @@ static int write_obj(const char *path, const psxrom_tmd *t)
 {
 	FILE *f = fopen(path, "w");
 	if (!f) return 0;
-	fputs("# exported by psxview; Y and Z are negated so +Y is up\n", f);
+	fputs("# exported by psxview-cli; Y and Z are negated so +Y is up\n", f);
 	size_t base = 1;
 	for (size_t o = 0; o < t->num_objects; o++) {
 		const psxrom_tmd_object *ob = &t->objects[o];
@@ -942,7 +942,7 @@ static int write_gltf(const char *path, const psxrom_tmd *t, int binary, const p
 	struct sbuf js = {0};
 	ok = ok && g.bin.p && g.nmesh && g.meshes.p && g.nodes.p;
 	if (ok) {
-		sb_printf(&js, "{\"asset\":{\"version\":\"2.0\",\"generator\":\"psxview\"},\"scene\":0,\"scenes\":[{\"nodes\":[");
+		sb_printf(&js, "{\"asset\":{\"version\":\"2.0\",\"generator\":\"psxview-cli\"},\"scene\":0,\"scenes\":[{\"nodes\":[");
 		if (skel) sb_printf(&js, "%zu", skel->bone_count);
 		else for (size_t i = 0; i < g.nmesh; i++) sb_printf(&js, "%s%zu", i ? "," : "", i);
 		sb_printf(&js, "]}],\"nodes\":[");   sb_add(&js, g.nodes.p, g.nodes.n);
