@@ -23,12 +23,33 @@ bool set_gl_attribute(SDL_GLAttr attribute, int value)
     return false;
 }
 
+void draw_resource_tree(const std::vector<ResourceEntry>& entries, const ResourceEntry*& selected)
+{
+    for (const ResourceEntry& entry : entries)
+    {
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow;
+        if (&entry == selected)
+            flags |= ImGuiTreeNodeFlags_Selected;
+        if (!entry.is_directory || entry.children.empty())
+            flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+        const bool open = ImGui::TreeNodeEx(&entry, flags, "%s", entry.name.c_str());
+        if ((ImGui::IsItemClicked() || ImGui::IsItemActivated()) && !ImGui::IsItemToggledOpen())
+            selected = &entry;
+        if (open && entry.is_directory && !entry.children.empty())
+        {
+            draw_resource_tree(entry.children, selected);
+            ImGui::TreePop();
+        }
+    }
+}
+
 bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
 {
-    std::vector<std::string> entries;
+    std::vector<ResourceEntry> entries;
     const psxrom_result entries_result = disc != nullptr
         ? load_resource_entries(disc, entries) : PSXROM_OK;
-    size_t selected_entry = entries.size();
+    const ResourceEntry* selected_entry = nullptr;
     bool running = true;
     while (running)
     {
@@ -62,20 +83,12 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
                 ImGui::Text("Failed to read disc entries: %s", psxrom_strerror(entries_result));
             else if (entries.empty())
                 ImGui::TextUnformatted("The disc has no directory entries.");
-            else if (ImGui::BeginListBox("Resources", ImVec2(-1, 0)))
+            else
             {
-                for (size_t i = 0; i < entries.size(); ++i)
-                {
-                    ImGui::PushID(&entries[i]);
-                    const ImVec2 text_position = ImGui::GetCursorScreenPos();
-                    if (ImGui::Selectable("##entry", selected_entry == i))
-                        selected_entry = i;
-                    if (ImGui::IsItemVisible())
-                        ImGui::GetWindowDrawList()->AddText(
-                            text_position, ImGui::GetColorU32(ImGuiCol_Text), entries[i].c_str());
-                    ImGui::PopID();
-                }
-                ImGui::EndListBox();
+                ImGui::TextUnformatted("Resources");
+                if (ImGui::BeginChild("resources", ImVec2(0, 300), ImGuiChildFlags_Borders))
+                    draw_resource_tree(entries, selected_entry);
+                ImGui::EndChild();
             }
         }
         else

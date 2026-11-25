@@ -36,9 +36,9 @@ size_t add_record(std::vector<uint8_t>& image, size_t offset, const char* name,
     return offset + length;
 }
 
-bool write_image(const char* path, bool empty, bool broken)
+bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
 {
-    std::vector<uint8_t> image(24 * sector_size);
+    std::vector<uint8_t> image(28 * sector_size);
     const size_t pvd = 16 * sector_size;
     std::memcpy(image.data() + pvd, "\1CD001", 6);
     write_u32(image, pvd + 158, 20);
@@ -46,9 +46,15 @@ bool write_image(const char* path, bool empty, bool broken)
     if (!empty)
     {
         size_t offset = 20 * sector_size;
-        offset = add_record(image, offset, "ROOT.TXT;1", 22, false);
-        add_record(image, offset, "SUBDIR", broken ? 30 : 21, true);
-        add_record(image, 21 * sector_size, "NESTED.TIM;1", 23, false);
+        offset = add_record(image, offset, invalid_name ? "BAD/NAME;1" : "ROOT.TXT;1", 22, false);
+        offset = add_record(image, offset, "SUBDIR", broken ? 30 : 21, true);
+        offset = add_record(image, offset, "EMPTY", 26, true);
+        add_record(image, offset, "OTHER", 27, true);
+        offset = 21 * sector_size;
+        offset = add_record(image, offset, "NESTED.TIM;1", 23, false);
+        add_record(image, offset, "INNER", 24, true);
+        add_record(image, 24 * sector_size, "NESTED.TIM;1", 25, false);
+        add_record(image, 27 * sector_size, "NESTED.TIM;1", 25, false);
     }
 
     std::ofstream out(path, std::ios::binary);
@@ -62,22 +68,33 @@ bool write_image(const char* path, bool empty, bool broken)
 int main(int argc, char* argv[])
 {
     CHECK(argc == 2);
-    for (int scenario = 0; scenario < 3; ++scenario)
+    for (int scenario = 0; scenario < 4; ++scenario)
     {
-        CHECK(write_image(argv[1], scenario == 1, scenario == 2));
+        CHECK(write_image(argv[1], scenario == 1, scenario == 2, scenario == 3));
         psxrom_disc* opened = nullptr;
         CHECK(psxrom_disc_open(argv[1], &opened) == PSXROM_OK);
         const std::unique_ptr<psxrom_disc, decltype(&psxrom_disc_close)> disc(opened, psxrom_disc_close);
-        std::vector<std::string> entries = {"stale"};
+        std::vector<ResourceEntry> entries = {{"stale", false, {}}};
         const psxrom_result result = load_resource_entries(disc.get(), entries);
         if (scenario == 0)
         {
             CHECK(result == PSXROM_OK);
-            CHECK((entries == std::vector<std::string>{"/ROOT.TXT", "/SUBDIR/", "/SUBDIR/NESTED.TIM"}));
+            CHECK(entries.size() == 4);
+            CHECK(entries[0].name == "ROOT.TXT" && !entries[0].is_directory && entries[0].children.empty());
+            CHECK(entries[1].name == "SUBDIR" && entries[1].is_directory && entries[1].children.size() == 2);
+            CHECK(entries[1].children[0].name == "NESTED.TIM" && !entries[1].children[0].is_directory);
+            CHECK(entries[1].children[1].name == "INNER" && entries[1].children[1].is_directory);
+            CHECK(entries[1].children[1].children.size() == 1);
+            CHECK(entries[1].children[1].children[0].name == "NESTED.TIM");
+            CHECK(entries[2].name == "EMPTY" && entries[2].is_directory && entries[2].children.empty());
+            CHECK(entries[3].name == "OTHER" && entries[3].is_directory && entries[3].children.size() == 1);
+            CHECK(entries[3].children[0].name == "NESTED.TIM");
         }
         else
         {
             CHECK(scenario == 1 ? result == PSXROM_OK : result != PSXROM_OK);
+            if (scenario == 3)
+                CHECK(result == PSXROM_ERR_FORMAT);
             CHECK(entries.empty());
         }
     }
