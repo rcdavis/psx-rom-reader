@@ -38,7 +38,7 @@ size_t add_record(std::vector<uint8_t>& image, size_t offset, const char* name,
 
 bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
 {
-    std::vector<uint8_t> image(29 * sector_size);
+    std::vector<uint8_t> image(35 * sector_size);
     const size_t pvd = 16 * sector_size;
     std::memcpy(image.data() + pvd, "\1CD001", 6);
     write_u32(image, pvd + 158, 20);
@@ -47,7 +47,7 @@ bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
     {
         size_t offset = 20 * sector_size;
         offset = add_record(image, offset, invalid_name ? "BAD/NAME;1" : "ROOT.TXT;1", 22, false);
-        offset = add_record(image, offset, "SUBDIR", broken ? 30 : 21, true);
+        offset = add_record(image, offset, "SUBDIR", broken ? 40 : 21, true);
         offset = add_record(image, offset, "EMPTY", 26, true);
         add_record(image, offset, "OTHER", 27, true);
         offset = 21 * sector_size;
@@ -98,6 +98,25 @@ bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
         write_u32(image, mmd, 8);
         write_u32(image, mmd + 4, 116);
         std::memcpy(image.data() + mmd + 8, image.data() + tmd, 108);
+
+        const size_t map = 29 * sector_size;
+        write_u32(image, map, 20);
+        write_u32(image, map + 4, 196);
+        write_u32(image, map + 8, 218);
+        write_u32(image, map + 12, 278);
+        write_u32(image, map + 16, 400);
+        write_u32(image, map + 20, 10);
+        write_u32(image, map + 24, UINT32_MAX);
+        write_u32(image, map + 32, 23);
+        write_u32(image, map + 128, 512);
+        write_u32(image, map + 164, 3);
+        write_u32(image, map + 168, 2);
+        write_u32(image, map + 176, UINT32_MAX);
+        write_u32(image, map + 188, UINT32_MAX);
+        std::memcpy(image.data() + map + 196, image.data() + direct_tim, 22);
+        image[map + 218] = 1;
+        image[map + 238] = 1;
+        image[map + 398] = 7;
     }
 
     std::ofstream out(path, std::ios::binary);
@@ -156,7 +175,7 @@ int main(int argc, char* argv[])
             const ResourceDetails invalid = load_resource_details(disc.get(), entries[1].children[1].children[0]);
             CHECK(invalid.type == ResourceDetailType::Error && invalid.error == PSXROM_ERR_FORMAT);
             const ResourceDetails unreadable = load_resource_details(
-                disc.get(), {"bad.tim", "/bad.tim", 100, 30, false, {}});
+                disc.get(), {"bad.tim", "/bad.tim", 100, 40, false, {}});
             CHECK(unreadable.type == ResourceDetailType::Error && unreadable.error == PSXROM_ERR_RANGE);
             const ResourceDetails oversized = load_resource_details(
                 disc.get(), {"big.tim", "/big.tim", UINT32_MAX, 23, false, {}});
@@ -172,7 +191,7 @@ int main(int argc, char* argv[])
                 disc.get(), {"bad.tmd", "/bad.tmd", 100, 23, false, {}});
             CHECK(invalid_tmd.type == ResourceDetailType::Error && invalid_tmd.error == PSXROM_ERR_FORMAT);
             const ResourceDetails unreadable_tmd = load_resource_details(
-                disc.get(), {"bad.tmd", "/bad.tmd", 100, 30, false, {}});
+                disc.get(), {"bad.tmd", "/bad.tmd", 100, 40, false, {}});
             CHECK(unreadable_tmd.type == ResourceDetailType::Error && unreadable_tmd.error == PSXROM_ERR_RANGE);
 
             const ResourceDetails mmd = load_resource_details(
@@ -185,8 +204,25 @@ int main(int argc, char* argv[])
                 disc.get(), {"bad.mmd", "/bad.mmd", 100, 23, false, {}});
             CHECK(invalid_mmd.type == ResourceDetailType::Error && invalid_mmd.error == PSXROM_ERR_FORMAT);
             const ResourceDetails unreadable_mmd = load_resource_details(
-                disc.get(), {"bad.mmd", "/bad.mmd", 100, 30, false, {}});
+                disc.get(), {"bad.mmd", "/bad.mmd", 100, 40, false, {}});
             CHECK(unreadable_mmd.type == ResourceDetailType::Error && unreadable_mmd.error == PSXROM_ERR_RANGE);
+
+            const ResourceDetails map = load_resource_details(
+                disc.get(), {"area.MaP", "/area.MaP", 10400, 29, false, {}});
+            CHECK(map.type == ResourceDetailType::Map && map.error == PSXROM_OK);
+            CHECK(map.map_tiles_w == 3 && map.map_tiles_h == 2 && map.map_used_tiles == 4);
+            CHECK(map.map_camera_origin[0] == 10 && map.map_camera_origin[1] == -1);
+            CHECK(map.map_camera_target[0] == 23 && map.map_view_distance == 512);
+            CHECK(map.map_image_count == 1 && map.map_object_count == 1 && map.map_instance_count == 1);
+            CHECK(map.map_digimon_count == 7);
+            CHECK(load_resource_details(disc.get(), {"folder.map", "/folder.map", 0, 0, true, {}}).type ==
+                  ResourceDetailType::None);
+            const ResourceDetails invalid_map = load_resource_details(
+                disc.get(), {"bad.map", "/bad.map", 100, 23, false, {}});
+            CHECK(invalid_map.type == ResourceDetailType::Error && invalid_map.error == PSXROM_ERR_FORMAT);
+            const ResourceDetails unreadable_map = load_resource_details(
+                disc.get(), {"bad.map", "/bad.map", 100, 40, false, {}});
+            CHECK(unreadable_map.type == ResourceDetailType::Error && unreadable_map.error == PSXROM_ERR_RANGE);
         }
         else
         {

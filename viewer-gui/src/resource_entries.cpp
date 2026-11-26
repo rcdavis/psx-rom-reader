@@ -67,7 +67,8 @@ ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& en
     const bool is_tim = has_extension(entry.name, ".tim");
     const bool is_tmd = has_extension(entry.name, ".tmd");
     const bool is_mmd = has_extension(entry.name, ".mmd");
-    if (!is_tim && !is_tmd && !is_mmd)
+    const bool is_map = has_extension(entry.name, ".map");
+    if (!is_tim && !is_tmd && !is_mmd && !is_map)
         return details;
 
     details.type = ResourceDetailType::Error;
@@ -87,6 +88,29 @@ ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& en
         return details;
 
     const std::unique_ptr<uint8_t, decltype(&std::free)> buffer(data, &std::free);
+    if (is_map)
+    {
+        psxrom_map map{};
+        details.error = psxrom_map_parse(buffer.get(), size, &map);
+        if (details.error != PSXROM_OK)
+            return details;
+
+        details.type = ResourceDetailType::Map;
+        details.map_tiles_w = map.tiles_w;
+        details.map_tiles_h = map.tiles_h;
+        for (size_t i = 0; i < static_cast<size_t>(map.tiles_w) * map.tiles_h; ++i)
+            details.map_used_tiles += map.tiles[i] != UINT32_MAX;
+        std::copy_n(map.camera_origin, 3, details.map_camera_origin);
+        std::copy_n(map.camera_target, 3, details.map_camera_target);
+        details.map_view_distance = map.view_distance;
+        details.map_image_count = map.num_images;
+        details.map_object_count = map.num_objects;
+        details.map_instance_count = map.num_instances;
+        details.map_digimon_count = map.num_digimon;
+        psxrom_map_free(&map);
+        return details;
+    }
+
     if (is_tmd || is_mmd)
     {
         psxrom_tmd tmd{};

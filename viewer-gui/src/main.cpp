@@ -129,6 +129,26 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
                         if (details.type == ResourceDetailType::Mmd)
                             ImGui::TextUnformatted("Unposed geometry; skeleton and animations are not loaded.");
                     }
+                    else if (details.type == ResourceDetailType::Map)
+                    {
+                        ImGui::SeparatorText("Digimon World map");
+                        ImGui::Text("Background grid: %lu x %lu tiles (%zu used)",
+                                    static_cast<unsigned long>(details.map_tiles_w),
+                                    static_cast<unsigned long>(details.map_tiles_h), details.map_used_tiles);
+                        ImGui::Text("Camera origin: (%ld, %ld, %ld)",
+                                    static_cast<long>(details.map_camera_origin[0]),
+                                    static_cast<long>(details.map_camera_origin[1]),
+                                    static_cast<long>(details.map_camera_origin[2]));
+                        ImGui::Text("Camera target: (%ld, %ld, %ld)",
+                                    static_cast<long>(details.map_camera_target[0]),
+                                    static_cast<long>(details.map_camera_target[1]),
+                                    static_cast<long>(details.map_camera_target[2]));
+                        ImGui::Text("View distance: %lu", static_cast<unsigned long>(details.map_view_distance));
+                        ImGui::Text("Embedded images: %zu", details.map_image_count);
+                        ImGui::Text("Sprite objects: %u", static_cast<unsigned>(details.map_object_count));
+                        ImGui::Text("Sprite instances: %u", static_cast<unsigned>(details.map_instance_count));
+                        ImGui::Text("Digimon records: %u", static_cast<unsigned>(details.map_digimon_count));
+                    }
                     else if (details.type == ResourceDetailType::Error)
                         ImGui::Text("Failed to load resource details: %s", psxrom_strerror(details.error));
                 }
