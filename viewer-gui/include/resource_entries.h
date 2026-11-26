@@ -22,6 +22,7 @@ enum class ResourceDetailType
     None,
     Tim,
     Tmd,
+    Mmd,
     Error
 };
 

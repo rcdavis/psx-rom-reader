@@ -38,7 +38,7 @@ size_t add_record(std::vector<uint8_t>& image, size_t offset, const char* name,
 
 bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
 {
-    std::vector<uint8_t> image(28 * sector_size);
+    std::vector<uint8_t> image(29 * sector_size);
     const size_t pvd = 16 * sector_size;
     std::memcpy(image.data() + pvd, "\1CD001", 6);
     write_u32(image, pvd + 158, 20);
@@ -93,6 +93,11 @@ bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
         image[tmd + 95] = 0x20;
         image[tmd + 102] = 1;
         image[tmd + 104] = 2;
+
+        const size_t mmd = 28 * sector_size;
+        write_u32(image, mmd, 8);
+        write_u32(image, mmd + 4, 116);
+        std::memcpy(image.data() + mmd + 8, image.data() + tmd, 108);
     }
 
     std::ofstream out(path, std::ios::binary);
@@ -169,6 +174,19 @@ int main(int argc, char* argv[])
             const ResourceDetails unreadable_tmd = load_resource_details(
                 disc.get(), {"bad.tmd", "/bad.tmd", 100, 30, false, {}});
             CHECK(unreadable_tmd.type == ResourceDetailType::Error && unreadable_tmd.error == PSXROM_ERR_RANGE);
+
+            const ResourceDetails mmd = load_resource_details(
+                disc.get(), {"model.MmD", "/model.MmD", 116, 28, false, {}});
+            CHECK(mmd.type == ResourceDetailType::Mmd && mmd.error == PSXROM_OK);
+            CHECK(mmd.object_count == 2 && mmd.triangle_count == 2);
+            CHECK(load_resource_details(disc.get(), {"folder.mmd", "/folder.mmd", 0, 0, true, {}}).type ==
+                  ResourceDetailType::None);
+            const ResourceDetails invalid_mmd = load_resource_details(
+                disc.get(), {"bad.mmd", "/bad.mmd", 100, 23, false, {}});
+            CHECK(invalid_mmd.type == ResourceDetailType::Error && invalid_mmd.error == PSXROM_ERR_FORMAT);
+            const ResourceDetails unreadable_mmd = load_resource_details(
+                disc.get(), {"bad.mmd", "/bad.mmd", 100, 30, false, {}});
+            CHECK(unreadable_mmd.type == ResourceDetailType::Error && unreadable_mmd.error == PSXROM_ERR_RANGE);
         }
         else
         {

@@ -121,11 +121,13 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
                         else
                             ImGui::TextUnformatted("Palettes: none");
                     }
-                    else if (details.type == ResourceDetailType::Tmd)
+                    else if (details.type == ResourceDetailType::Tmd || details.type == ResourceDetailType::Mmd)
                     {
-                        ImGui::SeparatorText("TMD model");
+                        ImGui::SeparatorText(details.type == ResourceDetailType::Mmd ? "MMD model" : "TMD model");
                         ImGui::Text("Objects: %zu", details.object_count);
                         ImGui::Text("Triangles: %zu", details.triangle_count);
+                        if (details.type == ResourceDetailType::Mmd)
+                            ImGui::TextUnformatted("Unposed geometry; skeleton and animations are not loaded.");
                     }
                     else if (details.type == ResourceDetailType::Error)
                         ImGui::Text("Failed to load resource details: %s", psxrom_strerror(details.error));

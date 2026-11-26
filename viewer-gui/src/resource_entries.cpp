@@ -66,7 +66,8 @@ ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& en
         return details;
     const bool is_tim = has_extension(entry.name, ".tim");
     const bool is_tmd = has_extension(entry.name, ".tmd");
-    if (!is_tim && !is_tmd)
+    const bool is_mmd = has_extension(entry.name, ".mmd");
+    if (!is_tim && !is_tmd && !is_mmd)
         return details;
 
     details.type = ResourceDetailType::Error;
@@ -86,14 +87,16 @@ ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& en
         return details;
 
     const std::unique_ptr<uint8_t, decltype(&std::free)> buffer(data, &std::free);
-    if (is_tmd)
+    if (is_tmd || is_mmd)
     {
         psxrom_tmd tmd{};
-        details.error = psxrom_tmd_parse(buffer.get(), size, &tmd);
+        details.error = is_mmd
+            ? psxrom_mmd_parse(buffer.get(), size, nullptr, 0, &tmd)
+            : psxrom_tmd_parse(buffer.get(), size, &tmd);
         if (details.error != PSXROM_OK)
             return details;
 
-        details.type = ResourceDetailType::Tmd;
+        details.type = is_mmd ? ResourceDetailType::Mmd : ResourceDetailType::Tmd;
         details.object_count = tmd.num_objects;
         for (size_t i = 0; i < tmd.num_objects; ++i)
             details.triangle_count += tmd.objects[i].num_tris;
