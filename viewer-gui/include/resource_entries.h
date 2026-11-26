@@ -24,6 +24,7 @@ enum class ResourceDetailType
     Tmd,
     Mmd,
     Map,
+    Tfs,
     Error
 };
 
@@ -53,6 +54,10 @@ struct ResourceDetails
     uint16_t map_object_count = 0;
     uint16_t map_instance_count = 0;
     uint16_t map_digimon_count = 0;
+    uint16_t tfs_width = 0;
+    uint16_t tfs_height = 0;
+    size_t tfs_tile_count = 0;
+    uint32_t tfs_palette_count = 0;
 };
 
 ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& entry);

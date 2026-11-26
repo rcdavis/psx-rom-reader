@@ -149,6 +149,15 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
                         ImGui::Text("Sprite instances: %u", static_cast<unsigned>(details.map_instance_count));
                         ImGui::Text("Digimon records: %u", static_cast<unsigned>(details.map_digimon_count));
                     }
+                    else if (details.type == ResourceDetailType::Tfs)
+                    {
+                        ImGui::SeparatorText("Digimon World TFS background");
+                        ImGui::Text("Recorded grid: %u x %u tiles", static_cast<unsigned>(details.tfs_width),
+                                    static_cast<unsigned>(details.tfs_height));
+                        ImGui::Text("Stored tiles: %zu (128 x 128 pixels each)", details.tfs_tile_count);
+                        ImGui::Text("Palettes: %lu (256 colors each)",
+                                    static_cast<unsigned long>(details.tfs_palette_count));
+                    }
                     else if (details.type == ResourceDetailType::Error)
                         ImGui::Text("Failed to load resource details: %s", psxrom_strerror(details.error));
                 }

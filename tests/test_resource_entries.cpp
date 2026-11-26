@@ -38,7 +38,7 @@ size_t add_record(std::vector<uint8_t>& image, size_t offset, const char* name,
 
 bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
 {
-    std::vector<uint8_t> image(35 * sector_size);
+    std::vector<uint8_t> image(52 * sector_size);
     const size_t pvd = 16 * sector_size;
     std::memcpy(image.data() + pvd, "\1CD001", 6);
     write_u32(image, pvd + 158, 20);
@@ -47,7 +47,7 @@ bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
     {
         size_t offset = 20 * sector_size;
         offset = add_record(image, offset, invalid_name ? "BAD/NAME;1" : "ROOT.TXT;1", 22, false);
-        offset = add_record(image, offset, "SUBDIR", broken ? 40 : 21, true);
+        offset = add_record(image, offset, "SUBDIR", broken ? 60 : 21, true);
         offset = add_record(image, offset, "EMPTY", 26, true);
         add_record(image, offset, "OTHER", 27, true);
         offset = 21 * sector_size;
@@ -117,6 +117,11 @@ bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
         image[map + 218] = 1;
         image[map + 238] = 1;
         image[map + 398] = 7;
+
+        const size_t tfs = 35 * sector_size;
+        image[tfs] = 6;
+        image[tfs + 2] = 5;
+        write_u32(image, tfs + 4, 2);
     }
 
     std::ofstream out(path, std::ios::binary);
@@ -175,7 +180,7 @@ int main(int argc, char* argv[])
             const ResourceDetails invalid = load_resource_details(disc.get(), entries[1].children[1].children[0]);
             CHECK(invalid.type == ResourceDetailType::Error && invalid.error == PSXROM_ERR_FORMAT);
             const ResourceDetails unreadable = load_resource_details(
-                disc.get(), {"bad.tim", "/bad.tim", 100, 40, false, {}});
+                disc.get(), {"bad.tim", "/bad.tim", 100, 60, false, {}});
             CHECK(unreadable.type == ResourceDetailType::Error && unreadable.error == PSXROM_ERR_RANGE);
             const ResourceDetails oversized = load_resource_details(
                 disc.get(), {"big.tim", "/big.tim", UINT32_MAX, 23, false, {}});
@@ -191,7 +196,7 @@ int main(int argc, char* argv[])
                 disc.get(), {"bad.tmd", "/bad.tmd", 100, 23, false, {}});
             CHECK(invalid_tmd.type == ResourceDetailType::Error && invalid_tmd.error == PSXROM_ERR_FORMAT);
             const ResourceDetails unreadable_tmd = load_resource_details(
-                disc.get(), {"bad.tmd", "/bad.tmd", 100, 40, false, {}});
+                disc.get(), {"bad.tmd", "/bad.tmd", 100, 60, false, {}});
             CHECK(unreadable_tmd.type == ResourceDetailType::Error && unreadable_tmd.error == PSXROM_ERR_RANGE);
 
             const ResourceDetails mmd = load_resource_details(
@@ -204,7 +209,7 @@ int main(int argc, char* argv[])
                 disc.get(), {"bad.mmd", "/bad.mmd", 100, 23, false, {}});
             CHECK(invalid_mmd.type == ResourceDetailType::Error && invalid_mmd.error == PSXROM_ERR_FORMAT);
             const ResourceDetails unreadable_mmd = load_resource_details(
-                disc.get(), {"bad.mmd", "/bad.mmd", 100, 40, false, {}});
+                disc.get(), {"bad.mmd", "/bad.mmd", 100, 60, false, {}});
             CHECK(unreadable_mmd.type == ResourceDetailType::Error && unreadable_mmd.error == PSXROM_ERR_RANGE);
 
             const ResourceDetails map = load_resource_details(
@@ -221,8 +226,22 @@ int main(int argc, char* argv[])
                 disc.get(), {"bad.map", "/bad.map", 100, 23, false, {}});
             CHECK(invalid_map.type == ResourceDetailType::Error && invalid_map.error == PSXROM_ERR_FORMAT);
             const ResourceDetails unreadable_map = load_resource_details(
-                disc.get(), {"bad.map", "/bad.map", 100, 40, false, {}});
+                disc.get(), {"bad.map", "/bad.map", 100, 60, false, {}});
             CHECK(unreadable_map.type == ResourceDetailType::Error && unreadable_map.error == PSXROM_ERR_RANGE);
+
+            const ResourceDetails tfs = load_resource_details(
+                disc.get(), {"area.TfS", "/area.TfS", 8 + 2 * 512 + 2 * (4 + 128 * 128), 35, false, {}});
+            CHECK(tfs.type == ResourceDetailType::Tfs && tfs.error == PSXROM_OK);
+            CHECK(tfs.tfs_width == 6 && tfs.tfs_height == 5);
+            CHECK(tfs.tfs_tile_count == 2 && tfs.tfs_palette_count == 2);
+            CHECK(load_resource_details(disc.get(), {"folder.tfs", "/folder.tfs", 0, 0, true, {}}).type ==
+                  ResourceDetailType::None);
+            const ResourceDetails invalid_tfs = load_resource_details(
+                disc.get(), {"bad.tfs", "/bad.tfs", 8, 35, false, {}});
+            CHECK(invalid_tfs.type == ResourceDetailType::Error && invalid_tfs.error == PSXROM_ERR_FORMAT);
+            const ResourceDetails unreadable_tfs = load_resource_details(
+                disc.get(), {"bad.tfs", "/bad.tfs", 100, 60, false, {}});
+            CHECK(unreadable_tfs.type == ResourceDetailType::Error && unreadable_tfs.error == PSXROM_ERR_RANGE);
         }
         else
         {
