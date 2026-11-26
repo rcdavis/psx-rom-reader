@@ -68,7 +68,8 @@ ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& en
     const bool is_tmd = has_extension(entry.name, ".tmd");
     const bool is_mmd = has_extension(entry.name, ".mmd");
     const bool is_map = has_extension(entry.name, ".map");
-    if (!is_tim && !is_tmd && !is_mmd && !is_map)
+    const bool is_tfs = has_extension(entry.name, ".tfs");
+    if (!is_tim && !is_tmd && !is_mmd && !is_map && !is_tfs)
         return details;
 
     details.type = ResourceDetailType::Error;
@@ -88,6 +89,22 @@ ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& en
         return details;
 
     const std::unique_ptr<uint8_t, decltype(&std::free)> buffer(data, &std::free);
+    if (is_tfs)
+    {
+        psxrom_tfs tfs{};
+        details.error = psxrom_tfs_parse(buffer.get(), size, &tfs);
+        if (details.error != PSXROM_OK)
+            return details;
+
+        details.type = ResourceDetailType::Tfs;
+        details.tfs_width = tfs.width;
+        details.tfs_height = tfs.height;
+        details.tfs_tile_count = tfs.num_tiles;
+        details.tfs_palette_count = tfs.num_palettes;
+        psxrom_tfs_free(&tfs);
+        return details;
+    }
+
     if (is_map)
     {
         psxrom_map map{};
