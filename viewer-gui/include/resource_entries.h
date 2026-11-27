@@ -25,6 +25,7 @@ enum class ResourceDetailType
     Mmd,
     Map,
     Tfs,
+    Vhb,
     Error
 };
 
@@ -58,6 +59,14 @@ struct ResourceDetails
     uint16_t tfs_height = 0;
     size_t tfs_tile_count = 0;
     uint32_t tfs_palette_count = 0;
+    size_t vhb_chunk_count = 0;
+    bool vhb_indexed = false;
+    bool vhb_has_sequences = false;
+    uint16_t vhb_program_count = 0;
+    uint16_t vhb_tone_count = 0;
+    uint16_t vhb_sample_count = 0;
+    size_t vhb_body_size = 0;
+    size_t vhb_sequence_count = 0;
 };
 
 ResourceDetails load_resource_details(psxrom_disc* disc, const ResourceEntry& entry);

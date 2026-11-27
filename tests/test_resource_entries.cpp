@@ -122,6 +122,23 @@ bool write_image(const char* path, bool empty, bool broken, bool invalid_name)
         image[tfs] = 6;
         image[tfs + 2] = 5;
         write_u32(image, tfs + 4, 2);
+
+        const size_t vhb = 30 * sector_size;
+        write_u32(image, vhb, 12);
+        write_u32(image, vhb + 4, 12 + 3104);
+        write_u32(image, vhb + 8, 12 + 3104);
+        std::memcpy(image.data() + vhb + 12, "pBAV", 4);
+        write_u32(image, vhb + 24, 3104);
+        image[vhb + 12 + 18] = 1;
+
+        const size_t music_vhb = 32 * sector_size;
+        write_u32(image, music_vhb, 16);
+        write_u32(image, music_vhb + 4, 16 + 2592);
+        write_u32(image, music_vhb + 8, 16 + 2592);
+        write_u32(image, music_vhb + 12, 16 + 2592 + 4);
+        std::memcpy(image.data() + music_vhb + 16, "pBAV", 4);
+        write_u32(image, music_vhb + 28, 2592);
+        write_u32(image, music_vhb + 16 + 2592, 4);
     }
 
     std::ofstream out(path, std::ios::binary);
@@ -242,6 +259,25 @@ int main(int argc, char* argv[])
             const ResourceDetails unreadable_tfs = load_resource_details(
                 disc.get(), {"bad.tfs", "/bad.tfs", 100, 60, false, {}});
             CHECK(unreadable_tfs.type == ResourceDetailType::Error && unreadable_tfs.error == PSXROM_ERR_RANGE);
+
+            const ResourceDetails vhb = load_resource_details(
+                disc.get(), {"sound.VhB", "/sound.VhB", 12 + 3104, 30, false, {}});
+            CHECK(vhb.type == ResourceDetailType::Vhb && vhb.error == PSXROM_OK);
+            CHECK(vhb.vhb_chunk_count == 1 && !vhb.vhb_indexed && !vhb.vhb_has_sequences);
+            CHECK(vhb.vhb_program_count == 1 && vhb.vhb_tone_count == 0 && vhb.vhb_sample_count == 0);
+            CHECK(vhb.vhb_body_size == 0);
+            const ResourceDetails music_vhb = load_resource_details(
+                disc.get(), {"music.vhb", "/music.vhb", 16 + 2592 + 4, 32, false, {}});
+            CHECK(music_vhb.type == ResourceDetailType::Vhb && music_vhb.error == PSXROM_OK);
+            CHECK(music_vhb.vhb_has_sequences && music_vhb.vhb_sequence_count == 1);
+            CHECK(load_resource_details(disc.get(), {"folder.vhb", "/folder.vhb", 0, 0, true, {}}).type ==
+                  ResourceDetailType::None);
+            const ResourceDetails invalid_vhb = load_resource_details(
+                disc.get(), {"bad.vhb", "/bad.vhb", 100, 23, false, {}});
+            CHECK(invalid_vhb.type == ResourceDetailType::Error && invalid_vhb.error == PSXROM_ERR_FORMAT);
+            const ResourceDetails unreadable_vhb = load_resource_details(
+                disc.get(), {"bad.vhb", "/bad.vhb", 100, 60, false, {}});
+            CHECK(unreadable_vhb.type == ResourceDetailType::Error && unreadable_vhb.error == PSXROM_ERR_RANGE);
         }
         else
         {

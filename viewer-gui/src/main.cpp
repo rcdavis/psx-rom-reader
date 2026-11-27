@@ -158,6 +158,20 @@ bool run_viewer(SDL_Window* window, const char* image_path, psxrom_disc* disc)
                         ImGui::Text("Palettes: %lu (256 colors each)",
                                     static_cast<unsigned long>(details.tfs_palette_count));
                     }
+                    else if (details.type == ResourceDetailType::Vhb)
+                    {
+                        ImGui::SeparatorText("Digimon World VHB sound bank");
+                        ImGui::Text("Layout: %s",
+                                    details.vhb_indexed ? "indexed sector table" : "chunked container");
+                        ImGui::Text("Chunks: %zu", details.vhb_chunk_count);
+                        ImGui::Text("First chunk: %u programs, %u tones, %u samples",
+                                    static_cast<unsigned>(details.vhb_program_count),
+                                    static_cast<unsigned>(details.vhb_tone_count),
+                                    static_cast<unsigned>(details.vhb_sample_count));
+                        ImGui::Text("First chunk sample data: %zu bytes", details.vhb_body_size);
+                        if (details.vhb_has_sequences)
+                            ImGui::Text("First chunk sequences: %zu", details.vhb_sequence_count);
+                    }
                     else if (details.type == ResourceDetailType::Error)
                         ImGui::Text("Failed to load resource details: %s", psxrom_strerror(details.error));
                 }
